@@ -1,6 +1,6 @@
 # Atlas
 
-A modular framework for quantum simulation, providing tools for variational eigensolvers, quantum dynamics, hardware execution, and benchmarking.
+A computational framework for simulating and benchmarking the dynamics of physically relevant quantum systems.
 
 ## Features
 
