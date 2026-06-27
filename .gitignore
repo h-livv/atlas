@@ -1,0 +1,7 @@
+vqe/ref_docs/
+
+__pycache__/
+
+*.csv
+
+.venv/
