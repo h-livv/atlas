@@ -1,6 +1,6 @@
 # Atlas Component Extension Guide
 
-This document describes the process for adding new components to the Atlas quantum simulation framework. VQE is the first implemented algorithm; the package is organized around framework-level concepts rather than VQE itself. This is a design guide, not an implementation file.
+This document describes how to add new components to the Atlas quantum simulation framework. Atlas is YAML-driven: users describe experiments in config files, and the factory/builder layer assembles concrete Python components. This is a design guide, not an implementation file.
 
 The core rule is that new components should plug into existing boundaries without forcing changes to unrelated layers. A new Hamiltonian should not require changes to the VQE optimizer loop. A new optimizer should not require changes to a physics model. A new plot should not run a quantum job.
 
@@ -8,151 +8,199 @@ The core rule is that new components should plug into existing boundaries withou
 
 ```text
 atlas/
-  main.py                 # CLI orchestration entry point
-  config.py               # Experiment and execution configuration
-  physics/                # Hamiltonians and observables
-  circuits/ansatzes/      # Parameterized circuit families (variational ansatzes)
-  algorithms/vqe.py       # VQE (first implemented algorithm)
-  optimization/           # Classical optimizers used by variational algorithms
-  execution/              # Simulator and hardware backends
-  experiments/            # Experiment orchestration and result containers
-  analysis/               # Pure post-processing metrics
-  visualization/          # Passive plotting and circuit drawing
-  io/                     # CSV loading and writing
+  main.py                      # CLI: parses --config, loads YAML, runs experiment, saves outputs
+  config.py                    # AtlasConfig and legacy dataclasses
+  io/
+    yaml_config.py             # load_config(path) -> AtlasConfig
+    csv_io.py                  # TFIM benchmark CSV I/O
+  experiments/
+    builders.py                # build_hamiltonian, build_ansatz, build_algorithm, …
+    factory.py                 # build_experiment, run_experiment, hardware backend resolution
+    tfim.py                    # TFIMExperiment (single-point and sweep workflows)
+    outputs.py                 # save_outputs, unique run directories, plot/CSV dispatch
+    results.py                 # VQEResult, VQDResult, TFIMPointResult, …
+  physics/                     # Hamiltonians and observables
+  circuits/ansatzes/           # Parameterized circuit families
+  algorithms/
+    vqe.py                     # VQE with shared _optimize_cost helper
+    vqd.py                     # VQD composed on VQE
+  optimization/                # Classical optimizers
+  execution/                   # Simulator and IBM Runtime backends
+  analysis/                    # Pure post-processing metrics
+  visualization/
+    tfim_plots.py              # VQE benchmark plots
+    tfim_vqd_plots.py          # VQD plots
+    circuit_drawer.py
+  configs/                     # Example YAML experiment files (repository root)
 ```
 
-Run the current TFIM workflow from the repository root:
+Run an experiment from the repository root:
 
 ```bash
-python -m atlas.main --mode sim --J 1.0 --h 0.5
+python -m atlas.main --config configs/tfim_vqe_single.yaml
 ```
 
-Default benchmark output directory: `atlas/data`.
+Each run writes to a unique folder under the configured output base:
+
+```text
+atlas/data/{experiment_name}_{YYYYMMDD_HHMMSS}/
+```
+
+## Runtime Flow
+
+```text
+YAML file
+  → atlas.io.yaml_config.load_config()
+  → atlas.experiments.factory.run_experiment()
+      → atlas.experiments.builders (hamiltonian, ansatz, optimizer, estimator, algorithm)
+      → atlas.experiments.tfim.TFIMExperiment
+  → atlas.experiments.outputs.save_outputs()
+      → CSV, plots, console summary
+```
+
+`main.py` must remain a thin orchestrator. Do not add Hamiltonian, algorithm, or plotting logic there.
+
+## YAML Configuration
+
+Experiments are described by YAML files with these sections:
+
+| Section | Purpose |
+|---------|---------|
+| `experiment` | `type` (`single_point` or `sweep`), `name` |
+| `system` | Hamiltonian name, parameters, optional sweep |
+| `algorithm` | `vqe` or `vqd`, plus algorithm parameters |
+| `ansatz` | Circuit family and parameters |
+| `optimizer` | Optimizer name and parameters |
+| `backend` | Simulator/estimator for cost evaluation |
+| `hardware` | IBM Runtime settings (optional) |
+| `analysis` | Observables set and fidelity toggle |
+| `output` | Base directory, CSV/plot toggles |
+
+Example (VQE single point):
+
+```yaml
+experiment:
+  type: single_point
+  name: tfim_vqe_single
+
+system:
+  name: tfim
+  parameters:
+    num_qubits: 2
+    J: 1.0
+    h: 0.5
+
+algorithm:
+  name: vqe
+
+ansatz:
+  name: hardware_efficient
+  parameters:
+    reps: 1
+
+optimizer:
+  name: scipy
+  parameters:
+    method: COBYLA
+    maxiter: 200
+    num_starts: 10
+
+backend:
+  name: statevector
+
+output:
+  directory: atlas/data
+  csv: false
+  plots: true
+```
+
+To add a new selectable component name (system, algorithm, ansatz, etc.):
+
+1. Implement the component (see sections below).
+2. Register it in `atlas/experiments/builders.py`.
+3. Add the name to the supported set in `atlas/io/yaml_config.py`.
+4. Add an example config under `configs/`.
 
 ## Extension Principles
 
-- Keep components narrow: each component should own one concept, such as a Hamiltonian, circuit/ansatz, optimizer, estimator, observable set, experiment runner, or plot family.
-- Prefer explicit data flow over hidden imports: pass Hamiltonians, circuits, observables, and configs into the components that need them.
-- Preserve `num_qubits` as a first-class value: Hamiltonians, circuits, observables, result records, and hardware validation should agree on qubit count.
-- Keep algorithm code model-agnostic: `VQE` should depend on a Hamiltonian interface, ansatz spec, estimator, and optimizer, not on TFIM-specific classes.
-- Keep visualization passive: plotting functions consume result objects and never run optimization, simulation, or hardware execution.
+- Keep components narrow: each component should own one concept.
+- Prefer explicit data flow over hidden imports.
+- Preserve `num_qubits` as a first-class value across Hamiltonians, ansatzes, observables, and results.
+- Keep algorithm code model-agnostic: `VQE` depends on Hamiltonian interface, ansatz spec, estimator, and optimizer — not TFIM classes.
+- Keep visualization passive: plotting functions consume result objects only.
+- Register new YAML-selectable components in `builders.py` and `yaml_config.py`.
 - Add abstractions only when at least two real implementations need the same contract.
 
 ## Adding A New Hamiltonian
 
-Use this when adding a new physical model, such as Heisenberg, XXZ, Hubbard after mapping, or another spin Hamiltonian.
-
-Place the implementation in `atlas/physics/hamiltonians.py` or a focused file under `atlas/physics/` if the module becomes too large.
+Place the implementation in `atlas/physics/hamiltonians.py` or a focused file under `atlas/physics/`.
 
 Required responsibilities:
 
 - Store model parameters and `num_qubits`.
 - Implement `operator() -> SparsePauliOp`.
-- Use a deterministic Pauli-string ordering so tests and CSV output are reproducible.
-- Support `exact_ground_state()` only when dense diagonalization is appropriate for the configured size.
+- Use deterministic Pauli-string ordering.
+- Implement `exact_ground_state()` and, when needed for multi-state benchmarks, `exact_spectrum(num_states)`.
 
-Expected interface:
+Register in `build_hamiltonian()` in `atlas/experiments/builders.py`:
 
 ```python
-class NewHamiltonian(Hamiltonian):
-    def __init__(self, num_qubits: int, ...):
-        ...
-
-    def operator(self) -> SparsePauliOp:
-        ...
+if config.system.name == "new_model":
+    return NewHamiltonian(**params)
 ```
 
-Process:
-
-1. Define the physical parameters and qubit-count rules.
-2. Build the Pauli terms in `operator()`.
-3. Add small-system tests for known Pauli terms and known energies when available.
-4. Add an experiment config or experiment runner only if the Hamiltonian needs its own sweep, observables, or plots.
-5. Do not modify `VQE` unless the new Hamiltonian exposes a real missing algorithm contract.
+Also add `"new_model"` to `_SUPPORTED["system"]` in `atlas/io/yaml_config.py`.
 
 Review checklist:
 
-- Does `operator()` return a valid `SparsePauliOp` for `num_qubits=1`, `2`, and a representative larger size when meaningful?
-- Are coefficients and Pauli-string endian conventions consistent with the rest of the framework?
-- Is exact diagonalization clearly treated as a small-system benchmark?
+- Does `operator()` return a valid `SparsePauliOp` for supported qubit counts?
+- Are coefficients and endian conventions consistent?
+- Is exact diagonalization clearly limited to small systems?
 
 ## Adding A New Ansatz
 
-Use this when adding a new parameterized circuit family for a variational algorithm.
-
-Place the implementation under `atlas/circuits/ansatzes/`. The `circuits/` namespace holds circuit construction; variational ansatzes live in the `ansatzes/` subpackage. Non-variational circuits (for example evolution circuits) would belong under `circuits/` when they are added.
+Place the implementation under `atlas/circuits/ansatzes/`.
 
 Required responsibilities:
 
 - Build a parameterized `QuantumCircuit`.
 - Own parameter ordering.
 - Report `num_qubits` and `num_parameters`.
-- Provide a binding method that returns a bound circuit for a parameter vector.
-
-Expected interface:
-
-```python
-spec = build_new_ansatz(num_qubits=..., ...)
-spec.circuit
-spec.parameters
-spec.num_qubits
-spec.num_parameters
-spec.bind(values)
-```
+- Provide `bind(values)` returning a bound circuit.
 
 The existing `AnsatzSpec` dataclass in `atlas/circuits/ansatzes/hardware_efficient.py` is the reference pattern.
 
-Process:
-
-1. Decide whether the ansatz is generic or tied to a specific experiment.
-2. Add a builder function or small class returning `AnsatzSpec`.
-3. Make `num_qubits` explicit and validate unsupported sizes early.
-4. Keep parameter naming and ordering deterministic.
-5. Add tests that verify parameter count and the circuit structure for small sizes.
-6. Update the relevant experiment config to select the new ansatz.
+Register in `build_ansatz()` in `atlas/experiments/builders.py` and in `yaml_config.py`.
 
 Review checklist:
 
-- Does `ansatz.num_parameters` match the number of values required by `bind()`?
-- Does `VQE` derive initial-point size from the ansatz rather than hardcoding it?
-- Does hardware execution use the same ansatz object as simulator execution?
+- Does `ansatz.num_parameters` match `bind()`?
+- Does `VQE` derive initial-point size from the ansatz?
+- Does hardware execution use the same ansatz object as simulation?
 
 ## Adding A New Algorithm
 
-Use this when adding a new quantum algorithm (for example VQD, QAOA, or a dynamics method) once its workflow is understood.
-
-Place the implementation under `atlas/algorithms/`. VQE currently lives at `atlas/algorithms/vqe.py` as the reference pattern: the algorithm module should not import TFIM-specific or plotting code.
+Place the implementation under `atlas/algorithms/`.
 
 Required responsibilities:
 
-- Accept the inputs its workflow needs (Hamiltonian, circuit, estimator, optimizer, or other algorithm-specific dependencies).
-- Return a structured result object defined in or alongside `atlas/experiments/results.py`.
-- Keep physics, execution, and visualization outside the algorithm module.
+- Accept Hamiltonian, ansatz, estimator, optimizer (or wrap an existing algorithm).
+- Return a structured result object from `atlas/experiments/results.py`.
+- Avoid importing TFIM, plotting, or `main.py` code.
 
-Process:
+For algorithms that share VQE's multi-start loop, call `VQE._optimize_cost()` rather than duplicating the optimization loop. VQD is the reference pattern: ground state via `VQE.run()`, excited states via deflated cost functions and `_optimize_cost()`.
 
-1. Implement the algorithm with the smallest interface that matches the workflow.
-2. Add a result dataclass if existing result types are not appropriate.
-3. Wire the algorithm through an experiment module, not through `main.py` or plotting.
-4. Do not modify unrelated algorithms unless a shared contract is genuinely missing.
+Register in `build_algorithm()` in `atlas/experiments/builders.py` and wire through `TFIMExperiment` or a new experiment module if the workflow differs.
 
 Review checklist:
 
-- Does the new algorithm avoid importing concrete experiment or TFIM classes?
-- Can an experiment runner compose the algorithm without duplicating circuit or Hamiltonian construction?
-- Are result fields stable enough for I/O and visualization to consume?
+- Does the algorithm avoid importing concrete experiment classes?
+- Can an experiment runner compose it without duplicating construction?
+- Are result fields stable for I/O and visualization?
 
 ## Adding A New Optimizer
 
-Use this when adding another classical optimizer, such as SPSA, Nelder-Mead, gradient-based methods, or a Qiskit optimizer wrapper.
-
 Place the implementation under `atlas/optimization/`.
-
-Required responsibilities:
-
-- Accept a scalar cost function and an initial point.
-- Return objective value, optimal parameters, function evaluations if available, and useful metadata.
-- Avoid importing Hamiltonian, ansatz, estimator, or experiment modules.
 
 Expected interface:
 
@@ -160,221 +208,100 @@ Expected interface:
 optimizer.minimize(cost_fn, initial_point) -> OptimizerRunResult
 ```
 
-The existing `ScipyOptimizer` in `atlas/optimization/scipy_optimizer.py` is the reference pattern.
-
-Process:
-
-1. Add the optimizer wrapper with the same result shape as existing optimizer wrappers.
-2. Map optimizer-specific output fields into framework result fields.
-3. Add config fields only for options that are actually needed.
-4. Update experiment wiring to choose the optimizer from config.
-5. Do not change Hamiltonian, ansatz, hardware, or plotting modules.
-
-Review checklist:
-
-- Can `VQE` call the optimizer through the same `minimize()` shape?
-- Are optimizer-specific options isolated in config?
-- Are missing metadata fields handled explicitly rather than guessed?
+Register in `build_optimizer()` in `atlas/experiments/builders.py`. Only pass optimizer-specific kwargs to the constructor (for example, filter out `num_starts`, which belongs to VQE config).
 
 ## Adding A New Estimator Or Backend
 
-Use this when adding a new execution target, such as another simulator primitive, a shot-based simulator, or another hardware provider.
+Place the implementation under `atlas/execution/`.
 
-Place the implementation under `atlas/execution/`. Current modules:
+Current modules:
 
-- `atlas/execution/simulator.py` — local `StatevectorEstimator` wrapper
-- `atlas/execution/ibm_runtime.py` — IBM Runtime `EstimatorV2` wrapper
+- `atlas/execution/simulator.py` — local statevector estimator
+- `atlas/execution/ibm_runtime.py` — IBM Runtime evaluation after optimization
 
-Required responsibilities:
+Register in `build_estimator()` in `atlas/experiments/builders.py`.
 
-- Evaluate expectation values for variational cost evaluation, or evaluate final observables after optimization.
-- Keep provider-specific setup, transpilation, layouts, options, and job metadata inside the execution module.
-- Validate qubit count and backend capability before execution.
-
-Expected simulator-style interface:
-
-```python
-estimator.expectation(circuit, observable, parameter_values) -> float
-```
-
-Expected hardware-style interface:
-
-```python
-executor.evaluate(ansatz, hamiltonian, parameter_values, observables) -> HardwareEvaluationResult
-```
-
-Process:
-
-1. Decide whether the backend participates in iterative optimization or only final evaluation.
-2. Implement the appropriate execution interface.
-3. Keep backend authentication and provider-specific options in execution config.
-4. Preserve observable names when returning measured values.
-5. Add tests or dry-run checks around layout application and qubit-count validation when possible.
-
-Review checklist:
-
-- Does the backend code avoid rebuilding Hamiltonians, ansatzes, or observables internally?
-- Are provider-specific fields stored as metadata rather than leaking into generic result objects?
-- Does the execution path fail clearly when `num_qubits` exceeds backend capacity?
+For hardware execution during an experiment, backend resolution lives in `atlas/experiments/factory.py` (`resolve_hardware_backend`).
 
 ## Adding New Observables
 
-Use this when adding quantities measured after a simulation or optimization run, such as correlations, magnetization, particle number, or custom diagnostics.
+Place the implementation in `atlas/physics/observables.py` or an experiment-specific module.
 
-Place the implementation in `atlas/physics/observables.py` or an experiment-specific observable module.
-
-Required responsibilities:
-
-- Return named `SparsePauliOp` values via `ObservableSpec`.
-- Make `num_qubits` explicit.
-- Keep names stable because CSV and plots may use them.
-
-Expected interface:
-
-```python
-observables = build_observables(num_qubits)  # list[ObservableSpec]
-```
-
-The existing `tfim_observables()` function is the reference pattern for experiment-specific observable sets.
-
-Process:
-
-1. Define the physical meaning and naming convention.
-2. Generate Pauli strings from `num_qubits`.
-3. Add the observables to the relevant experiment runner.
-4. Update metrics, CSV, and plotting only if those outputs should expose the new observable.
-
-Review checklist:
-
-- Are observable names stable and descriptive?
-- Are Pauli strings valid for all supported qubit counts?
-- Are hardware and simulator paths consuming the same observable definitions?
+Register in `build_observables()` in `atlas/experiments/builders.py`. The existing `tfim_observables()` function is the reference pattern.
 
 ## Adding A New Experiment
 
-Use this when combining existing components into a new workflow, such as a new Hamiltonian sweep or a new benchmark.
-
-Place the implementation under `atlas/experiments/`. The current TFIM workflow is at `atlas/experiments/tfim.py`; shared result containers live in `atlas/experiments/results.py`.
+Place the implementation under `atlas/experiments/`. The current TFIM workflow is `atlas/experiments/tfim.py`.
 
 Required responsibilities:
 
-- Own experiment-specific composition.
-- Build the Hamiltonian, ansatz, observables, optimizer, and execution components from config.
-- Assemble structured result objects.
-- Delegate metrics, I/O, and visualization to their own modules.
+- Accept `AtlasConfig` and a pre-built algorithm (constructed by the factory).
+- Build per-point Hamiltonian, ansatz, and observables via builders.
+- Return structured result objects from `results.py`.
+- Delegate CSV, plots, and console output to `outputs.py`.
 
-Expected interface:
+To add a new experiment type:
 
-```python
-experiment.run_single_point(...) -> PointResult
-experiment.run_sweep(...) -> BenchmarkResult
-```
-
-Process:
-
-1. Define the experiment config and sweep parameters (extend `atlas/config.py` if needed).
-2. Reuse existing Hamiltonian, ansatz, optimizer, estimator, and metric components.
-3. Create result containers if existing ones are not appropriate.
-4. Keep `atlas/main.py` as a thin orchestration layer that selects and invokes the experiment.
-5. Add plotting and CSV support only after the result shape is stable.
+1. Implement the experiment class.
+2. Dispatch from `build_experiment()` / `ConfiguredExperimentRunner` in `factory.py`.
+3. Add output handling in `save_outputs()` in `outputs.py`.
+4. Add a YAML `experiment.type` value and validation in `yaml_config.py` if needed.
 
 Review checklist:
 
 - Does the experiment own only workflow composition?
-- Can the same result be saved, plotted, or printed without rerunning computation?
-- Does `main.py` remain free of circuit, optimizer, and backend internals?
+- Can results be saved and plotted without rerunning computation?
+- Does `main.py` remain free of internals?
 
 ## Adding Visualization
 
-Use this when adding plots, circuit drawings, convergence views, or benchmark summaries.
+Place passive plotting functions under `atlas/visualization/`.
 
-Place the implementation under `atlas/visualization/`. TFIM benchmark plots live in `atlas/visualization/tfim_plots.py`; circuit drawing is in `atlas/visualization/circuit_drawer.py`.
+- VQE benchmark plots: `atlas/visualization/tfim_plots.py`
+- VQD plots: `atlas/visualization/tfim_vqd_plots.py`
 
-Required responsibilities:
-
-- Consume structured results.
-- Write visual artifacts to an output path.
-- Avoid running algorithms, exact diagonalization, hardware jobs, or CSV loading.
-
-Expected interface:
-
-```python
-plot_new_view(result, output_dir)
-```
-
-Process:
-
-1. Confirm the required values already exist in result objects.
-2. If values are missing, add them to analysis or experiment output first.
-3. Implement the plot as a passive function.
-4. Add the plot to a `plot_all_*` helper only if it belongs to the default output set.
+Wire new plots through `atlas/experiments/outputs.py` when they belong in the default output set for a result type.
 
 Review checklist:
 
-- Does the plot function have no side effects other than writing the plot?
-- Does it avoid reconstructing Hamiltonians, ansatzes, or statevectors?
-- Are plot labels tied to the experiment rather than a generic algorithm?
+- No side effects other than writing plot files?
+- No reconstruction of Hamiltonians or re-running of algorithms?
 
 ## Adding CSV Or Persistence Support
 
-Use this when saving or loading benchmark data, hardware results, or experiment summaries.
+Place writers under `atlas/io/` or add dispatch logic in `outputs.py`.
 
-Place the implementation under `atlas/io/`. The current TFIM benchmark writer is `write_tfim_benchmark()` in `atlas/io/csv_io.py`.
+- VQE benchmark: `write_tfim_benchmark()` in `atlas/io/csv_io.py`
+- VQD benchmark: `_write_vqd_benchmark_csv()` in `atlas/experiments/outputs.py`
 
-Required responsibilities:
-
-- Convert result objects to rows.
-- Load existing result formats into result objects or compatible records.
-- Keep schema changes deliberate and documented.
-
-Expected interface:
-
-```python
-write_result(result, path)
-load_result(path)
-```
-
-Process:
-
-1. Define the schema and stable column names.
-2. Keep units and naming consistent with result fields.
-3. Preserve legacy columns when reproducing legacy benchmark output.
-4. Add migration helpers only when old data must remain readable.
-
-Review checklist:
-
-- Is CSV I/O separate from metrics and plotting?
-- Are optional hardware fields handled cleanly when absent?
-- Can loaded hardware results be merged into benchmark results without rerunning hardware jobs?
+Each run's CSV and plots go into that run's unique output directory.
 
 ## Adding Tests For New Components
 
 Minimum useful tests:
 
-- Hamiltonians: Pauli term construction, coefficient signs, exact energy for small systems.
-- Ansatzes: qubit count, parameter count, deterministic parameter order, bind behavior.
-- Optimizers: interface compatibility with a simple quadratic cost function.
-- VQE: smoke test on a tiny Hamiltonian with deterministic seed or fixed initial point.
-- Observables: Pauli-string construction and names.
-- Metrics: fidelity, expectation value, absolute error, relative error.
-- I/O: CSV columns and round-trip behavior.
+- Hamiltonians: Pauli terms, coefficients, exact energies for small systems.
+- Ansatzes: qubit count, parameter count, bind behavior.
+- Optimizers: interface compatibility with a simple cost function.
+- VQE/VQD: smoke test on a tiny Hamiltonian.
+- YAML loading: valid configs parse; unknown component names fail clearly.
+- I/O: CSV columns match result fields.
 
 ## Common Anti-Patterns
 
-- Importing a concrete TFIM class inside `VQE` or another algorithm module.
+- Importing TFIM classes inside `VQE` or `VQD`.
+- Hardcoding component choices in `main.py`.
 - Rebuilding the ansatz separately in simulator, hardware, and analysis code.
-- Creating observables inside hardware execution.
 - Letting plotting functions compute experiment results.
-- Adding a broad plugin system before multiple real implementations need it.
-- Treating exact diagonalization as scalable for large `num_qubits`.
-- Hardcoding parameter count or qubit count outside legacy-compatibility defaults.
-- Placing framework-level code under algorithm-specific paths (for example putting shared physics under `algorithms/`).
+- Adding a plugin registry before multiple implementations need it.
+- Duplicating VQE's multi-start loop instead of calling `_optimize_cost()`.
 
 ## Recommended Addition Workflow
 
 1. Identify which component type is being added.
-2. Add the smallest interface-compatible implementation in the correct module under `atlas/`.
-3. Add or update config in `atlas/config.py` only for values users must choose.
-4. Wire the component through an experiment module, not through an algorithm or plotting code.
-5. Add focused tests for the component boundary.
-6. Update documentation with the component's purpose, interface, dependencies, and limitations.
+2. Implement the smallest interface-compatible module under `atlas/`.
+3. Register the component in `builders.py` and `yaml_config.py`.
+4. Wire through an experiment module and `outputs.py` if new result types or plots are needed.
+5. Add an example config under `configs/`.
+6. Add focused tests for the component boundary.
+7. Update documentation with purpose, interface, and limitations.

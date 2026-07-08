@@ -96,125 +96,151 @@ Initialize Parameters (θ)
 
 ## Atlas Architecture
 
-Atlas is a modular quantum simulation framework designed to decouple the physical model description from the quantum algorithm execution and hardware backend details. Within this framework, the VQE implementation documented here is one algorithmic component that fits into the broader suite of modular capabilities.
+Atlas is a modular quantum simulation framework that decouples physical model description from algorithm execution and hardware backend details. Experiments are configured via YAML and assembled by a factory layer; VQE and VQD are the first implemented variational algorithms.
 
-The high-level architecture of Atlas is structured as follows:
+The high-level architecture:
+
+```
+YAML config → load_config → factory/builders → experiment → outputs
+```
+
+Within the package:
 
 ```
 Atlas
-├── Hamiltonians
+├── Config (AtlasConfig, YAML loading)
+├── Hamiltonians (physics/)
+├── Circuits / Ansätze (circuits/ansatzes/)
 ├── Algorithms
-│   ├── VQE
-│   ├── VQD (planned)
-│   └── ...
-├── Hardware
-├── Observables
-├── Benchmarking
-└── Visualization
+│   ├── VQE (algorithms/vqe.py)
+│   └── VQD (algorithms/vqd.py)
+├── Execution (simulator, IBM Runtime)
+├── Experiments (TFIM sweeps and single-point runs)
+├── Analysis (metrics)
+└── Visualization (VQE and VQD plots)
 ```
 
 Atlas maintains a clean separation between:
-* **Hamiltonian definition**: Describing the physical system's interactions (e.g., TFIM parameters $J$ and $h$) independently of the solver.
-* **Quantum algorithms**: The variational or dynamical algorithms (e.g., VQE) that process the Hamiltonian.
-* **Hardware execution**: Defining the target backend, circuit transpilation, and execution modes (simulators vs. physical QPUs).
-* **Observable extraction**: Reconstructing correlation functions and physical properties from quantum measurements.
-* **Benchmarking and visualization**: Plotting parity, magnetization curves, and error analysis against classical baselines.
 
-This modularity allows developers to integrate new algorithms, alternative physical models, and different hardware backends without changing the overall simulation workflow.
+- **Hamiltonian definition** — physical parameters ($J$, $h$, `num_qubits`) independent of the solver
+- **Quantum algorithms** — VQE minimizes energy; VQD finds successive eigenstates via overlap penalties
+- **Hardware execution** — optional IBM Runtime evaluation after simulator optimization
+- **Observable extraction** — magnetization and correlation functions from prepared states
+- **Benchmarking and visualization** — fidelity, absolute error, CSV export, and plots per run
+
+This modularity allows new algorithms, Hamiltonians, and backends to be registered in the builder layer without changing the overall workflow.
 
 ---
 
 ## 4. Implementation
 
-Within Atlas, the VQE module contains a modular python implementation tailored to a 2-qubit system.
+Within Atlas, the TFIM VQE workflow is implemented as an n-qubit modular pipeline under `atlas/`. The reference implementation uses a hardware-efficient ansatz and SciPy COBYLA optimization; exact diagonalization provides analytical benchmarks for small systems.
 
 ### Hamiltonian Construction
 
 #### Motivation for the TFIM Benchmark
-The Transverse Field Ising Model (TFIM) was selected for this module as a canonical benchmark for quantum algorithms. It is a fundamental model in condensed matter physics that is exactly solvable for small systems, providing a reliable analytical baseline to verify quantum calculations. Furthermore, it exhibits a non-trivial quantum phase transition at $h/J = 1$, serves as a scalable starting point for larger spin chains, and is commonly used across the quantum information science community to validate new VQE implementations.
 
-The system represents a 2-qubit **Transverse Field Ising Model (TFIM)**:
+The Transverse Field Ising Model (TFIM) is a canonical benchmark for variational quantum algorithms. It is exactly solvable for small systems, exhibits a quantum phase transition at $h/J = 1$, and scales to arbitrary chain length $N$ qubits.
+
+For an $N$-qubit chain the Hamiltonian is:
 
 $
-H = -J Z_0 Z_1 - h(X_0 + X_1)
+H = -J \sum_{i=0}^{N-2} Z_i Z_{i+1} - h \sum_{i=0}^{N-1} X_i
 $
 
-where:
-* $J$ is the coupling constant (ferromagnetic when $J > 0$).
-* $h$ is the transverse magnetic field strength.
+In `atlas/physics/hamiltonians.py`, `TFIMHamiltonian` constructs this operator as a `SparsePauliOp` with:
 
-In [tfim_phy.py](../vqe/physics/tfim_phy.py), the function [get_tfim_hamiltonian](../vqe/physics/tfim_phy.py#L5) constructs this operator using Qiskit's `SparsePauliOp` from a list of Pauli terms:
-* Term 1: `ZZ` with coefficient $-J$
-* Term 2: `XI` with coefficient $-h$
-* Term 3: `IX` with coefficient $-h$
+- Nearest-neighbor $ZZ$ terms with coefficient $-J$
+- On-site $X$ terms with coefficient $-h$
+
+The class provides `exact_ground_state()` and `exact_spectrum(num_states)` for benchmarking VQE and VQD respectively.
 
 ### Ansatz
-The trial wavefunction is constructed using a 2-qubit **Hardware-Efficient Ansatz (HEA)** in [tfim_optimizer.py](../vqe/optimizer/tfim_optimizer.py#L14):
 
-```
-     ┌──────────┐     ┌──────────┐
-q_0: ┤ Ry(θ[0]) ├──■──┤ Ry(θ[2]) ├
-     ├──────────┤┌─┴─┐├──────────┤
-q_1: ┤ Ry(θ[1]) ├┤ X ├┤ Ry(θ[3]) ├
-     └──────────┘└───┘└──────────┘
-```
+The trial wavefunction uses an **Hardware-Efficient Ansatz (HEA)** in `atlas/circuits/ansatzes/hardware_efficient.py`:
 
-* **Parameter Count**: 4 parameters ($\theta_0, \theta_1, \theta_2, \theta_3$).
-* **Entangling Structure**: A single CNOT gate between qubit 0 and qubit 1.
-* **Expressibility**: This structure is chosen because the ground states of the 2-qubit TFIM have purely real amplitudes. The $R_y$ rotation gates restrict the state space to real coordinates, while the CNOT gate generates the entanglement needed to capture the spin-spin correlation.
+- Single-qubit $R_y$ rotations on each qubit
+- CNOT entangling layers between adjacent qubits
+- Configurable depth via the `reps` parameter in YAML
+
+For the 2-qubit case with `reps=1`, the circuit has 4 parameters and one CNOT gate — sufficient to capture the real-amplitude ground states of the 2-qubit TFIM.
 
 ### Classical Optimization
-* **Optimizer**: The COBYLA (Constrained Optimization BY Linear Approximations) algorithm is used. It is a derivative-free method, making it less sensitive to statistical measurement noise compared to gradient-based methods.
-* **Stopping Criteria**: A limit of `maxiter=200` function evaluations is set in the optimizer.
-* **Multi-start Optimization**: To avoid getting trapped in local minima , the function [run_vqe_sim](../vqe/optimizer/tfim_optimizer.py#L7) implements a multi-start strategy. It samples uniform random initial guesses from $[0, 2\pi]^4$ and tracks the overall minimum energy.
-* **Convergence Metrics**: Evaluated via the minimum cost function value and the total function evaluations.
+
+- **Optimizer**: COBYLA (derivative-free), configured via YAML `optimizer.parameters`
+- **Multi-start**: `num_starts` random initial points in $[0, 2\pi]^{\text{num\_params}}$; the best energy across starts is kept
+- **Implementation**: `atlas/algorithms/vqe.py` delegates the multi-start loop to `_optimize_cost()`, which VQD reuses for excited-state stages
 
 ### Exact Diagonalization
-As an analytical benchmark, [calculate_exact_solution](../vqe/physics/tfim_phy.py#L14) constructs the dense matrix of the Hamiltonian and applies NumPy's Hermetian eigensolver `numpy.linalg.eigh`. It returns the lowest eigenvalue (ground-state energy) and its corresponding eigenvector.
+
+`TFIMHamiltonian.exact_ground_state()` and `exact_spectrum()` use dense Hermitian diagonalization (`numpy.linalg.eigh`) on the Hamiltonian matrix. This is intended for small-system benchmarks only.
 
 ---
 
 ## 5. Hardware Execution
 
-Quantum hardware validation is implemented in [tfim_hardware_run.py](../vqe/tfim_hardware_run.py) using the **IBM Qiskit Runtime** platform.
+Optional IBM Quantum hardware evaluation is implemented in `atlas/execution/ibm_runtime.py` and wired through `atlas/experiments/tfim.py`.
 
 ### IBM Runtime Estimator
-The script uses Qiskit's `EstimatorV2` primitive (`mode=backend`) which calculates expectation values directly on real QPUs.
 
-#### Estimator Design Choice
-The `Estimator` primitive was selected for hardware execution rather than `Sampler`. While the `Sampler` primitive is designed to return the probability distribution of raw bitstrings, the `Estimator` is optimized to directly evaluate the expectation values of physical observables (like the Hamiltonian or magnetization operators). Because VQE operates by minimizing energy expectation values rather than measurement probabilities, using the `Estimator` avoids unnecessary classical post-processing of bitstrings and naturally aligns with the variational objective of the algorithm.
+Hardware runs use Qiskit's `EstimatorV2` primitive to evaluate expectation values on real QPUs. Enable hardware in the YAML config:
 
-### Transpilation and Execution Pipeline
-1. **Ansatz Parameter Assignment**: The optimized parameters $\theta$ obtained from simulation are assigned to the `QuantumCircuit` representation of the HEA.
-2. **Preset Pass Manager**: A preset pass manager (`generate_preset_pass_manager` with `optimization_level=3`) maps the virtual 2-qubit circuit onto the physical layout of the target hardware device (e.g., `ibm_kingston`). This transpilation ensures optimal routing, gate synthesis, and instruction scheduling.
-3. **Observables Transpilation**: The Hamiltonian, longitudinal correlation $ZZ$, and transverse magnetizations $X_0+X_1$ are mapped using `apply_layout` to align with the physical qubits chosen during transpilation.
-4. **Resilience Level**: The estimator is run with `resilience_level = 1`, which automatically performs readout error mitigation (measurement error mitigation) to refine the expectation values.
-5. **Observed Metrics**: The hardware returns the expectation values for the energy, correlation, and magnetization in a single combined execution job.
+```yaml
+hardware:
+  enabled: true
+  backend_name: null   # auto-select least-busy backend when null
+  resilience_level: 1
+```
 
-*Note on Parameter Transfer*: Due to the queue latency of public QPUs, executing a full VQE classical optimization loop (requiring hundreds of sequential quantum runs) directly on physical hardware is highly inefficient. Therefore, the parameters are pre-optimized in a noiseless simulation and then transferred to the QPU for a single-shot verification.
+### Execution Pipeline
+
+1. **Simulator optimization**: VQE (or VQD ground state) runs on the statevector backend.
+2. **Parameter transfer**: Optimized parameters are evaluated on IBM hardware in a single job.
+3. **Transpilation**: Preset pass manager maps the circuit to the target device layout.
+4. **Resilience**: Readout error mitigation via `resilience_level`.
+5. **Observables**: Energy and TFIM observables ($\langle ZZ \rangle$, $\langle X_0 + \cdots \rangle$) are returned in one execution.
+
+*Note on Parameter Transfer*: Full VQE optimization loops on public QPUs are impractical due to queue latency. Atlas optimizes on the simulator and uses hardware for verification, matching the workflow of the legacy `vqe_legacy/` scripts.
+
+---
+
+## Variational Quantum Deflation (VQD)
+
+Atlas also implements VQD in `atlas/algorithms/vqd.py`. VQD finds excited states sequentially:
+
+1. Ground state: standard VQE energy minimization.
+2. Excited states: minimize $E(\theta) + \beta \sum_j |\langle\psi(\theta)|\psi_j\rangle|^2$ where $|\psi_j\rangle$ are previously found states.
+
+VQD reuses VQE's multi-start optimizer rather than duplicating the loop. Configure via YAML:
+
+```yaml
+algorithm:
+  name: vqd
+  parameters:
+    num_states: 2
+    beta: 1.0
+```
+
+Per-state absolute error and fidelity are reported against the exact spectrum from `exact_spectrum(num_states)`.
 
 ---
 
 ## Design Philosophy
 
-The software design of Atlas enforces a strict decoupling of the simulation pipeline into independent components:
+The software design of Atlas enforces strict decoupling of the simulation pipeline:
 
 ```
-Hamiltonian
-      ↓
-Algorithm
-      ↓
-Backend
-      ↓
-Analysis
+YAML config → Hamiltonian → Algorithm → Backend → Experiment → Analysis → Visualization
 ```
 
 This abstraction ensures that:
-* **Algorithm-independence**: Multiple algorithms (such as VQE or exact diagonalization) can run on the exact same Hamiltonian definition.
-* **Backend-independence**: The same algorithm can execute seamlessly on noiseless simulators, noisy local backends, or physical hardware without altering the circuit definitions.
-* **Analysis-independence**: Observables and benchmarking metrics remain backend-agnostic, allowing consistent comparative evaluation of results.
 
-By framing these divisions as a formal software architecture choice rather than an implementation detail, Atlas remains extensible and robust to future quantum hardware developments.
+- **Algorithm-independence**: VQE, VQD, and exact diagonalization can run on the same Hamiltonian definition.
+- **Backend-independence**: The same algorithm executes on simulators or IBM hardware without changing circuit definitions.
+- **Config-independence**: Experiments are fully described by YAML; `main.py` only loads config and dispatches.
+- **Analysis-independence**: Observables and metrics remain backend-agnostic for consistent comparison.
+
+By framing these divisions as formal software architecture, Atlas remains extensible as algorithms and hardware evolve.
 
 ---
 
@@ -242,9 +268,30 @@ This module validates the quality of the VQE results by calculating the followin
 
 ---
 
-## 7. Results
+## Running Benchmarks
 
-The benchmark figures and plots generated from the run are shown below.
+Atlas experiments are launched from YAML config files:
+
+```bash
+# Single-point VQE
+python -m atlas.main --config configs/tfim_vqe_single.yaml
+
+# h-sweep VQE benchmark (CSV + plots)
+python -m atlas.main --config configs/tfim_vqe.yaml
+
+# Single-point VQD (multi-state)
+python -m atlas.main --config configs/tfim_vqd.yaml
+```
+
+Each run writes outputs to a unique directory:
+
+```text
+atlas/data/{experiment_name}_{YYYYMMDD_HHMMSS}/
+```
+
+The benchmark figures below were generated from the legacy monolithic workflow and remain representative of VQE validation results. Current Atlas runs produce equivalent plot types under the per-run output directory when `output.plots: true`.
+
+---
 
 ### 7.1. Ground State Energy vs $h/J$
 
@@ -308,7 +355,7 @@ The benchmark figures and plots generated from the run are shown below.
 ### Current Limitations
 * **Hardware Noise**: Gate infidelities, thermal relaxation, and qubit crosstalk produce a systematic energy offset (mean absolute error of **0.04261**, max error of **0.07843**).
 * **COBYLA Limitations**: As the parameter count and qubit size grow, COBYLA's performance scales poorly due to the lack of gradient information, making it prone to getting stuck in local minima.
-* **System Size**: The current 2-qubit system size is small enough to be trivially simulated classically.
+* **System Size**: Exact diagonalization scales exponentially; while Atlas supports n-qubit TFIM chains, reliable variational convergence becomes harder as `num_qubits` and ansatz depth grow.
 
 ### Scalability
 As the system scales to $N$ qubits:
@@ -320,41 +367,37 @@ As the system scales to $N$ qubits:
 
 ## Atlas Roadmap
 
-The VQE implementation represents the first completed algorithmic module within Atlas. Future development will expand the framework into a broader quantum simulation platform.
+VQE and VQD are implemented in the current Atlas framework. Future development expands into a broader quantum simulation platform:
 
-* Variational Quantum Deflation (VQD): Modify the cost function with an overlap penalty to find excited state energies:
-   $
-   E_1(\theta) = \langle\psi(\theta)|H|\psi(\theta)\rangle + \beta |\langle\psi(\theta)|\psi_0\rangle|^2
-   $
-* Qubit Count Expansion: Extend the TFIM implementation to 4, 8, and 16 qubits.
-* Alternative Ansätze: Implement the **Unitary Coupled Cluster (UCCSD)** or **Hamiltonian Variational Ansatz (HVA)** for better physical expressibility.
-* Advanced Error Mitigation: Integrate zero-noise extrapolation (ZNE) and probabilistic error cancellation (PEC) using Mitiq.
-* Real-time Quantum Dynamics: Simulate time-evolution of TFIM using Trotter-Suzuki decomposition.
-
-Below is the intended progression of the framework's roadmap:
+- **Qubit count expansion**: Extend TFIM benchmarks to 8 and 16 qubits.
+- **Alternative ansätze**: Unitary Coupled Cluster (UCCSD) and Hamiltonian Variational Ansatz (HVA).
+- **Advanced error mitigation**: Zero-noise extrapolation (ZNE) and probabilistic error cancellation (PEC) via Mitiq.
+- **Quantum dynamics**: Time evolution via Trotter-Suzuki decomposition.
+- **Additional Hamiltonians**: Heisenberg, Hubbard, molecular systems.
 
 ```
 Current
+✓ YAML-driven configuration
 ✓ Variational Quantum Eigensolver (VQE)
+✓ Variational Quantum Deflation (VQD)
+✓ n-qubit TFIM and hardware-efficient ansatz
+✓ IBM Quantum Runtime integration
 
 ↓
 
-Variational Quantum Deflation (VQD)
+Expanded ansätze and system sizes
 
 ↓
 
-Quantum Dynamics
-(Trotterization, Product Formula Methods)
+Quantum dynamics (Trotterization)
 
 ↓
 
-Hardware-Aware Execution
-(Error Mitigation, Noise Characterization)
+Hardware-aware error mitigation
 
 ↓
 
-Additional Physical Systems
-(Heisenberg, Hubbard, Molecular Hamiltonians)
+Additional physical systems
 ```
 
 ---
