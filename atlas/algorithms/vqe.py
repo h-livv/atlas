@@ -1,15 +1,15 @@
 """Generic multi-start VQE optimization loop.
 
 This module is independent of any specific Hamiltonian, ansatz family, or
-execution backend. It works with any object exposing `.operator()` and
-`.num_qubits` (see `atlas.physics.hamiltonians.Hamiltonian`) and any
-`AnsatzSpec`-shaped object exposing `.circuit` and `.num_parameters`. It must
-never import TFIM-specific or hardware-specific code.
+execution backend. It works with any object exposing ``.operator()`` and
+``.num_qubits`` and any ``AnsatzSpec``-shaped object exposing ``.circuit`` and
+``.num_parameters``. It must never import TFIM-specific or hardware-specific
+code.
 """
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 
@@ -31,13 +31,13 @@ class VQE:
             return self._rng.uniform(0, 2 * np.pi, size=size)
         return np.random.uniform(0, 2 * np.pi, size=size)
 
-    def run(self, hamiltonian, ansatz) -> VQEResult:
-        """Optimize the ansatz parameters to minimize `hamiltonian`'s energy."""
-
-        operator = hamiltonian.operator()
-
-        def cost_fn(param_values):
-            return self.estimator.expectation(ansatz.circuit, operator, param_values)
+    def _optimize_cost(
+        self,
+        cost_fn: Callable,
+        ansatz,
+        num_qubits: int,
+    ) -> VQEResult:
+        """Run multi-start optimization for an arbitrary scalar ``cost_fn``."""
 
         global_best_energy = float("inf")
         global_best_parameters = None
@@ -56,6 +56,16 @@ class VQE:
             optimal_parameters=global_best_parameters,
             nfev=global_best_nfev,
             num_starts=self.num_starts,
-            num_qubits=hamiltonian.num_qubits,
+            num_qubits=num_qubits,
             optimizer_method=self.optimizer.method,
         )
+
+    def run(self, hamiltonian, ansatz) -> VQEResult:
+        """Optimize the ansatz parameters to minimize ``hamiltonian``'s energy."""
+
+        operator = hamiltonian.operator()
+
+        def cost_fn(param_values):
+            return self.estimator.expectation(ansatz.circuit, operator, param_values)
+
+        return self._optimize_cost(cost_fn, ansatz, hamiltonian.num_qubits)

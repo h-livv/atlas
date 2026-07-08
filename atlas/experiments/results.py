@@ -28,6 +28,22 @@ class VQEResult:
 
 
 @dataclass
+class VQDResult:
+    """Outcome of a sequential VQD run (one ``VQEResult`` per eigenstate)."""
+
+    states: list
+    num_qubits: int
+
+    @property
+    def energies(self) -> np.ndarray:
+        return np.array([state.energy for state in self.states])
+
+    @property
+    def ground_state_result(self) -> VQEResult:
+        return self.states[0]
+
+
+@dataclass
 class HardwareEvaluationResult:
     """Outcome of evaluating a bound ansatz on IBM hardware."""
 
@@ -41,7 +57,7 @@ class HardwareEvaluationResult:
 
 @dataclass
 class TFIMPointResult:
-    """All results (exact, simulated, optionally hardware) for one `(J, h)` point."""
+    """All results (exact, simulated, optionally hardware) for one ``(J, h)`` point."""
 
     h: float
     J: float
@@ -52,6 +68,57 @@ class TFIMPointResult:
     fidelity: float
     observables: dict
     hardware_result: Optional[HardwareEvaluationResult] = None
+
+
+@dataclass
+class TFIMVQDPointResult:
+    """VQD results for one ``(J, h)`` point with per-state fidelities and errors."""
+
+    h: float
+    J: float
+    num_qubits: int
+    exact_energies: list
+    exact_states: list
+    vqd_result: VQDResult
+    fidelities: list
+    absolute_errors: list
+    observables: dict
+    hardware_result: Optional[HardwareEvaluationResult] = None
+
+
+@dataclass
+class TFIMVQDBenchmarkResult:
+    """A collection of ``TFIMVQDPointResult`` for a full ``h`` sweep."""
+
+    points: list = field(default_factory=list)
+
+    def __len__(self) -> int:
+        return len(self.points)
+
+    def __iter__(self):
+        return iter(self.points)
+
+    @property
+    def h_values(self) -> np.ndarray:
+        return np.array([p.h for p in self.points])
+
+    @property
+    def num_states(self) -> int:
+        if not self.points:
+            return 0
+        return len(self.points[0].vqd_result.states)
+
+    def state_exact_energies(self, state_index: int) -> np.ndarray:
+        return np.array([p.exact_energies[state_index] for p in self.points])
+
+    def state_vqd_energies(self, state_index: int) -> np.ndarray:
+        return np.array([p.vqd_result.states[state_index].energy for p in self.points])
+
+    def state_fidelities(self, state_index: int) -> np.ndarray:
+        return np.array([p.fidelities[state_index] for p in self.points])
+
+    def state_absolute_errors(self, state_index: int) -> np.ndarray:
+        return np.array([p.absolute_errors[state_index] for p in self.points])
 
 
 @dataclass

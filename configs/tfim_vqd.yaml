@@ -1,0 +1,50 @@
+experiment:
+  type: single_point
+  name: tfim_vqd_single
+
+system:
+  name: tfim
+  parameters:
+    num_qubits: 4
+    J: 1.0
+    h: 0.5
+
+algorithm:
+  name: vqd
+  parameters:
+    num_states: 2
+    beta: 1.0
+
+ansatz:
+  name: hardware_efficient
+  parameters:
+    reps: 1
+
+optimizer:
+  name: scipy
+  parameters:
+    method: COBYLA
+    maxiter: 200
+    num_starts: 10
+
+backend:
+  name: statevector
+  parameters:
+    seed: null
+
+hardware:
+  provider: ibm_runtime
+  enabled: false
+  backend_name: null
+  hardware_csv_path: null
+  resilience_level: 1
+  optimization_level: 3
+
+analysis:
+  observables: tfim_default
+  fidelity: true
+
+output:
+  directory: atlas/data
+  csv: false
+  plots: true

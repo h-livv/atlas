@@ -220,6 +220,45 @@ def plot_fidelity(result: TFIMBenchmarkResult, output_dir: str) -> None:
     plt.close()
 
 
+def plot_vqe_single_point(point, output_dir: str) -> None:
+    """Bar chart comparing exact and VQE ground-state energy for one point."""
+
+    os.makedirs(output_dir, exist_ok=True)
+    labels = ["Exact", "VQE"]
+    energies = [point.exact_energy, point.vqe_result.energy]
+    colors = ["black", "crimson"]
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+    bars = ax.bar(labels, energies, color=colors, alpha=0.75, width=0.5)
+    ax.set_ylabel("Energy")
+    ax.set_title(f"Ground-State Energy (h = {point.h}, J = {point.J})")
+    ax.grid(True, axis="y", linestyle=":", alpha=0.6)
+
+    error = abs(point.exact_energy - point.vqe_result.energy)
+    ax.text(
+        0.5,
+        0.02,
+        f"Absolute error: {error:.3e}\nFidelity: {point.fidelity:.4f}",
+        transform=ax.transAxes,
+        ha="center",
+        va="bottom",
+        fontsize=10,
+        bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
+    )
+    for bar, energy in zip(bars, energies):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height(),
+            f"{energy:.6f}",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+
+    fig.savefig(os.path.join(output_dir, "vqe_single_point_energy.png"), dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
 def plot_all_tfim(result: TFIMBenchmarkResult, output_dir: str) -> None:
     """Generate the full default plot set, creating `output_dir` if missing.
 

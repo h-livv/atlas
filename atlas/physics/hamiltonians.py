@@ -35,9 +35,9 @@ class Hamiltonian:
         raise NotImplementedError
 
     def exact_ground_state(self) -> ExactResult:
-        """Diagonalize `operator()` and return the ground energy and state.
+        """Diagonalize ``operator()`` and return the ground energy and state.
 
-        Matrix size scales as `2 ** num_qubits`; this is a small-system
+        Matrix size scales as ``2 ** num_qubits``; this is a small-system
         benchmark only, not a scalable solver.
         """
 
@@ -47,6 +47,21 @@ class Hamiltonian:
             energy=float(eigenvalues[lowest_index]),
             statevector=eigenvectors[:, lowest_index],
         )
+
+    def exact_spectrum(self, num_states: int) -> list[ExactResult]:
+        """Return the lowest ``num_states`` exact eigenpairs by dense diagonalization."""
+
+        if num_states < 1:
+            raise ValueError("num_states must be at least 1.")
+        eigenvalues, eigenvectors = eigh(self.operator().to_matrix())
+        indices = np.argsort(eigenvalues)[:num_states]
+        return [
+            ExactResult(
+                energy=float(eigenvalues[i]),
+                statevector=eigenvectors[:, i],
+            )
+            for i in indices
+        ]
 
 
 class TFIMHamiltonian(Hamiltonian):
