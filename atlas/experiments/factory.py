@@ -5,13 +5,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Union
 
-from atlas.config import AtlasConfig
+from atlas.config import AtlasConfig, is_dynamics_algorithm, is_variational_algorithm
 from atlas.experiments.builders import (
     build_algorithm,
     build_estimator,
+    build_evolver,
     build_optimizer,
+    resolve_evolution_methods,
+    resolve_evolution_time,
+    resolve_trotter_step_values,
 )
+from atlas.experiments.hamiltonian_sim_experiment import HamiltonianSimExperiment
 from atlas.experiments.results import (
+    SimBenchmarkResult,
+    SimPointResult,
+    SimValidationResult,
     TFIMBenchmarkResult,
     TFIMPointResult,
     TFIMVQDBenchmarkResult,
@@ -51,14 +59,29 @@ def resolve_hardware_backend(config: AtlasConfig, num_qubits: int):
         return None
 
 
-def build_experiment(config: AtlasConfig) -> TFIMExperiment:
-    """Wire configured components into a ``TFIMExperiment``."""
-
+def _build_variational_experiment(config: AtlasConfig) -> TFIMExperiment:
     estimator = build_estimator(config)
     optimizer = build_optimizer(config)
-    algorithm = build_algorithm(config, estimator, optimizer)
-
+    algorithm = build_algorithm(config, estimator=estimator, optimizer=optimizer)
     return TFIMExperiment(config=config, algorithm=algorithm)
+
+
+def _build_dynamics_experiment(config: AtlasConfig) -> HamiltonianSimExperiment:
+    evolver = build_evolver(config)
+    algorithm = build_algorithm(config, evolver=evolver)
+    return HamiltonianSimExperiment(config=config, algorithm=algorithm)
+
+
+def build_experiment(
+    config: AtlasConfig,
+) -> Union[TFIMExperiment, HamiltonianSimExperiment]:
+    """Wire configured components into the appropriate experiment workflow."""
+
+    if is_variational_algorithm(config.algorithm.name):
+        return _build_variational_experiment(config)
+    if is_dynamics_algorithm(config.algorithm.name):
+        return _build_dynamics_experiment(config)
+    raise ValueError(f"Unknown algorithm '{config.algorithm.name}'.")
 
 
 @dataclass
@@ -71,6 +94,9 @@ class ExperimentRunResult:
         TFIMBenchmarkResult,
         TFIMVQDPointResult,
         TFIMVQDBenchmarkResult,
+        SimPointResult,
+        SimBenchmarkResult,
+        SimValidationResult,
     ]
     experiment_type: str
     algorithm_name: str
@@ -79,7 +105,11 @@ class ExperimentRunResult:
 class ConfiguredExperimentRunner:
     """Run an experiment described entirely by ``AtlasConfig``."""
 
-    def __init__(self, config: AtlasConfig, experiment: TFIMExperiment):
+    def __init__(
+        self,
+        config: AtlasConfig,
+        experiment: Union[TFIMExperiment, HamiltonianSimExperiment],
+    ):
         self.config = config
         self.experiment = experiment
 
@@ -88,6 +118,8 @@ class ConfiguredExperimentRunner:
             result = self._run_single_point()
         elif self.config.experiment.type == "sweep":
             result = self._run_sweep()
+        elif self.config.experiment.type == "trotter_validation":
+            result = self._run_trotter_validation()
         else:
             raise ValueError(f"Unknown experiment type '{self.config.experiment.type}'.")
 
@@ -111,6 +143,11 @@ class ConfiguredExperimentRunner:
     def _run_single_point(self):
         params = self.config.system.parameters
         J = float(params["J"])
+
+        if is_dynamics_algorithm(self.config.algorithm.name):
+            h = float(params["h"])
+            return self.experiment.run_single_point(J=J, h=h)
+
         h = float(params["h"])
         mode, backend = self._execution_mode_and_backend()
 
@@ -124,20 +161,37 @@ class ConfiguredExperimentRunner:
             raise ValueError("Experiment type 'sweep' requires system.sweep in config.")
 
         parameter = sweep.get("parameter", "h")
-        if parameter != "h":
-            raise ValueError(f"Sweep parameter '{parameter}' is not supported yet.")
-
-        h_values = sweep["values"]
+        sweep_values = sweep["values"]
         J = float(self.config.system.parameters["J"])
-        mode, backend = self._execution_mode_and_backend()
 
+        if is_dynamics_algorithm(self.config.algorithm.name):
+            fixed_h = float(self.config.system.parameters["h"])
+            fixed_evolution_time = resolve_evolution_time(self.config)
+            return self.experiment.run_sweep(
+                J=J,
+                sweep_values=sweep_values,
+                sweep_parameter=parameter,
+                fixed_h=fixed_h if parameter in ("evolution_time", "num_trotter_steps") else None,
+                fixed_evolution_time=(
+                    fixed_evolution_time
+                    if parameter in ("h", "num_trotter_steps")
+                    else None
+                ),
+            )
+
+        if parameter != "h":
+            raise ValueError(
+                f"Sweep parameter '{parameter}' is not supported for variational experiments."
+            )
+
+        mode, backend = self._execution_mode_and_backend()
         hardware_source = self.config.hardware.hardware_csv_path
         include_hardware = self.config.hardware.enabled and backend is not None
 
         if self.config.algorithm.name == "vqd":
             return self.experiment.run_sweep_vqd(
                 J,
-                h_values,
+                sweep_values,
                 include_hardware=include_hardware,
                 hardware_source=hardware_source,
                 backend=backend,
@@ -145,10 +199,31 @@ class ConfiguredExperimentRunner:
 
         return self.experiment.run_sweep(
             J,
-            h_values,
+            sweep_values,
             include_hardware=include_hardware,
             hardware_source=hardware_source,
             backend=backend,
+        )
+
+    def _run_trotter_validation(self):
+        if not is_dynamics_algorithm(self.config.algorithm.name):
+            raise ValueError(
+                "Experiment type 'trotter_validation' requires a dynamics algorithm."
+            )
+
+        params = self.config.system.parameters
+        J = float(params["J"])
+        h = float(params["h"])
+        evolution_time = resolve_evolution_time(self.config)
+        method_names = resolve_evolution_methods(self.config)
+        step_values = resolve_trotter_step_values(self.config)
+
+        return self.experiment.run_trotter_validation(
+            J=J,
+            h=h,
+            evolution_time=evolution_time,
+            method_names=method_names,
+            step_values=step_values,
         )
 
 

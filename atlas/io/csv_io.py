@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from atlas.analysis.metrics import absolute_error, relative_error_percent
-from atlas.experiments.results import TFIMBenchmarkResult
+from atlas.experiments.results import SimBenchmarkResult, SimValidationResult, TFIMBenchmarkResult
 
 
 def _hardware_field(result: TFIMBenchmarkResult, getter) -> list:
@@ -80,3 +80,51 @@ def load_hardware_results(path: str) -> pd.DataFrame:
     """
 
     return pd.read_csv(path)
+
+
+def write_sim_benchmark(result: SimBenchmarkResult, path: str) -> None:
+    """Write a Hamiltonian simulation sweep to CSV."""
+
+    rows = []
+    for point in result.points:
+        row = {
+            "h": point.h,
+            "J": point.J,
+            "evolution_time": point.evolution_time,
+            "fidelity": point.fidelity,
+            "method_name": point.sim_result.method_name,
+            "num_trotter_steps": point.sim_result.num_trotter_steps,
+            "circuit_depth": point.sim_result.circuit_depth,
+        }
+        for name, value in point.observables.items():
+            row[f"sim_{name}"] = value
+            row[f"exact_{name}"] = point.exact_observables[name]
+            row[f"error_{name}"] = point.observable_errors[name]
+        rows.append(row)
+
+    pd.DataFrame(rows).to_csv(path, index=False)
+
+
+def write_sim_validation(result: SimValidationResult, path: str) -> None:
+    """Write a multi-method Trotter validation result to CSV."""
+
+    rows = []
+    for series in result.series:
+        for point in series.points:
+            row = {
+                "h": point.h,
+                "J": point.J,
+                "evolution_time": point.evolution_time,
+                "method_name": point.method_name,
+                "num_trotter_steps": point.num_trotter_steps,
+                "fidelity": point.fidelity,
+                "max_operator_error": point.max_operator_error,
+                "circuit_depth": point.circuit_depth,
+            }
+            for name, value in point.observables.items():
+                row[f"sim_{name}"] = value
+                row[f"exact_{name}"] = point.exact_observables[name]
+                row[f"error_{name}"] = point.observable_errors[name]
+            rows.append(row)
+
+    pd.DataFrame(rows).to_csv(path, index=False)

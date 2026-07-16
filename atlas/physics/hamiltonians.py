@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.linalg import eigh
 from qiskit.quantum_info import SparsePauliOp
+from scipy.linalg import expm
 
 
 @dataclass
@@ -63,6 +64,25 @@ class Hamiltonian:
             for i in indices
         ]
 
+    def exact_time_evolution(
+        self,
+        initial_state: np.ndarray,
+        time: float,
+    ) -> ExactResult:
+        """Return the exact evolved state ``exp(-i H t) |psi_0>`` for small systems.
+
+        Uses dense matrix exponentiation; matrix size scales as ``2 ** num_qubits``.
+        """
+
+        matrix = self.operator().to_matrix()
+        state = np.asarray(initial_state, dtype=complex).reshape(-1)
+        evolved = expm(-1j * matrix * time) @ state
+        norm = np.linalg.norm(evolved)
+        if norm == 0:
+            raise ValueError("Time evolution produced a zero-norm statevector.")
+        evolved = evolved / norm
+        energy = float(np.real(np.vdot(evolved, matrix @ evolved)))
+        return ExactResult(energy=energy, statevector=evolved)
 
 class TFIMHamiltonian(Hamiltonian):
     """Nearest-neighbor transverse field Ising model Hamiltonian.

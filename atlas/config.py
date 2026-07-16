@@ -135,6 +135,14 @@ class BackendConfig:
 
 
 @dataclass
+class InitialStateConfig:
+    """Initial state selection for Hamiltonian simulation."""
+
+    name: str = "computational"
+    parameters: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class AnalysisConfig:
     """Post-run analysis options."""
 
@@ -155,3 +163,16 @@ class AtlasConfig:
     hardware: HardwareConfig = field(default_factory=HardwareConfig)
     analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    initial_state: Optional[InitialStateConfig] = None
+
+
+VARIATIONAL_ALGORITHMS = frozenset({"vqe", "vqd"})
+DYNAMICS_ALGORITHMS = frozenset({"hamiltonian_sim"})
+
+
+def is_variational_algorithm(name: str) -> bool:
+    return name in VARIATIONAL_ALGORITHMS
+
+
+def is_dynamics_algorithm(name: str) -> bool:
+    return name in DYNAMICS_ALGORITHMS

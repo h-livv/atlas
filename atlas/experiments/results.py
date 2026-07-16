@@ -173,3 +173,116 @@ class TFIMBenchmarkResult:
                 for p in self.points
             ]
         )
+
+
+@dataclass
+class SimulationResult:
+    """Outcome of a single Hamiltonian simulation run."""
+
+    statevector: np.ndarray
+    num_qubits: int
+    evolution_time: float
+    method_name: str
+    num_trotter_steps: int
+    circuit_depth: int
+
+
+@dataclass
+class SimPointResult:
+    """Exact and simulated dynamics results for one parameter point."""
+
+    h: float
+    J: float
+    num_qubits: int
+    evolution_time: float
+    exact_state: np.ndarray
+    sim_result: SimulationResult
+    fidelity: float
+    observables: dict
+    exact_observables: dict
+    observable_errors: dict
+
+    @property
+    def num_trotter_steps(self) -> int:
+        return self.sim_result.num_trotter_steps
+
+    @property
+    def circuit_depth(self) -> int:
+        return self.sim_result.circuit_depth
+
+    @property
+    def method_name(self) -> str:
+        return self.sim_result.method_name
+
+    @property
+    def max_operator_error(self) -> float:
+        if not self.observable_errors:
+            return float("nan")
+        return float(max(self.observable_errors.values()))
+
+
+@dataclass
+class SimBenchmarkResult:
+    """A collection of ``SimPointResult`` for a parameter sweep."""
+
+    sweep_parameter: str = "evolution_time"
+    points: list = field(default_factory=list)
+
+    def __len__(self) -> int:
+        return len(self.points)
+
+    def __iter__(self):
+        return iter(self.points)
+
+    @property
+    def sweep_values(self) -> np.ndarray:
+        if self.sweep_parameter == "num_trotter_steps":
+            return np.array([p.num_trotter_steps for p in self.points])
+        return np.array([getattr(p, self.sweep_parameter) for p in self.points])
+
+    @property
+    def method_name(self) -> str:
+        if not self.points:
+            return ""
+        return self.points[0].method_name
+
+    def metric_values(self, metric: str) -> np.ndarray:
+        if metric == "fidelity":
+            return self.fidelities
+        if metric == "max_operator_error":
+            return np.array([p.max_operator_error for p in self.points])
+        if metric == "circuit_depth":
+            return np.array([p.circuit_depth for p in self.points])
+        if metric == "num_trotter_steps":
+            return np.array([p.num_trotter_steps for p in self.points])
+        if metric.startswith("operator_error:"):
+            name = metric.split(":", 1)[1]
+            return np.array([p.observable_errors.get(name, float("nan")) for p in self.points])
+        raise ValueError(f"Unknown benchmark metric '{metric}'.")
+
+    @property
+    def fidelities(self) -> np.ndarray:
+        return np.array([p.fidelity for p in self.points])
+
+    def observable_values(self, name: str) -> np.ndarray:
+        return np.array([p.observables.get(name) for p in self.points])
+
+    def exact_observable_values(self, name: str) -> np.ndarray:
+        return np.array([p.exact_observables.get(name) for p in self.points])
+
+
+@dataclass
+class SimValidationResult:
+    """Trotter-step validation across one or more evolution methods."""
+
+    h: float
+    J: float
+    evolution_time: float
+    series: list = field(default_factory=list)
+
+    def __len__(self) -> int:
+        return len(self.series)
+
+    def __iter__(self):
+        return iter(self.series)
+

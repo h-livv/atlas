@@ -1,0 +1,42 @@
+experiment:
+  type: trotter_validation
+  name: tfim_trotter_validation
+
+system:
+  name: tfim
+  parameters:
+    num_qubits: 2
+    J: 1.0
+    h: 0.5
+    evolution_time: 0.5
+
+algorithm:
+  name: hamiltonian_sim
+  parameters:
+    evolution_methods: [lie, strang]
+    num_trotter_steps: [1, 2, 4, 8, 16, 32]
+
+initial_state:
+  name: computational
+  parameters:
+    bitstring: "00"
+
+backend:
+  name: statevector_evolver
+
+hardware:
+  provider: ibm_runtime
+  enabled: false
+  backend_name: null
+  hardware_csv_path: null
+  resilience_level: 1
+  optimization_level: 3
+
+analysis:
+  observables: tfim_default
+  fidelity: true
+
+output:
+  directory: atlas/data
+  csv: true
+  plots: true

@@ -16,20 +16,30 @@ atlas/
   experiments/
     builders.py                # build_hamiltonian, build_ansatz, build_algorithm, …
     factory.py                 # build_experiment, run_experiment, hardware backend resolution
-    tfim.py                    # TFIMExperiment (single-point and sweep workflows)
+    tfim.py                    # TFIMExperiment (VQE/VQD workflows)
+    hamiltonian_sim_experiment.py  # HamiltonianSimExperiment (dynamics workflows)
     outputs.py                 # save_outputs, unique run directories, plot/CSV dispatch
     results.py                 # VQEResult, VQDResult, TFIMPointResult, …
   physics/                     # Hamiltonians and observables
-  circuits/ansatzes/           # Parameterized circuit families
+  circuits/
+    ansatzes/                  # Parameterized circuit families
+    initial_states.py          # Initial states for dynamics
+    evolution/                 # Product-formula circuit builders
   algorithms/
     vqe.py                     # VQE with shared _optimize_cost helper
     vqd.py                     # VQD composed on VQE
+    hamiltonian_sim.py         # Product-formula time evolution
   optimization/                # Classical optimizers
-  execution/                   # Simulator and IBM Runtime backends
+  execution/
+    estimator.py               # Variational cost evaluation
+    evolver.py                 # Dynamics circuit execution
+    simulator.py               # Backward-compatible re-exports
+    ibm_runtime.py             # IBM Runtime hardware evaluation
   analysis/                    # Pure post-processing metrics
   visualization/
     tfim_plots.py              # VQE benchmark plots
     tfim_vqd_plots.py          # VQD plots
+    sim_plots.py               # Hamiltonian simulation plots
     circuit_drawer.py
   configs/                     # Example YAML experiment files (repository root)
 ```
@@ -68,10 +78,11 @@ Experiments are described by YAML files with these sections:
 |---------|---------|
 | `experiment` | `type` (`single_point` or `sweep`), `name` |
 | `system` | Hamiltonian name, parameters, optional sweep |
-| `algorithm` | `vqe` or `vqd`, plus algorithm parameters |
-| `ansatz` | Circuit family and parameters |
-| `optimizer` | Optimizer name and parameters |
-| `backend` | Simulator/estimator for cost evaluation |
+| `algorithm` | `vqe`, `vqd`, or `hamiltonian_sim`, plus algorithm parameters |
+| `ansatz` | Circuit family and parameters (**required for variational algorithms**) |
+| `optimizer` | Optimizer name and parameters (**required for variational algorithms**) |
+| `initial_state` | Initial state for `hamiltonian_sim` (optional; defaults to `\|0...0>`) |
+| `backend` | `statevector` (VQE/VQD) or `statevector_evolver` (dynamics) |
 | `hardware` | IBM Runtime settings (optional) |
 | `analysis` | Observables set and fidelity toggle |
 | `output` | Base directory, CSV/plot toggles |

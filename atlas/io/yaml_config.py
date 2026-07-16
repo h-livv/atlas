@@ -13,19 +13,22 @@ from atlas.config import (
     AnsatzConfig,
     AtlasConfig,
     BackendConfig,
+    DYNAMICS_ALGORITHMS,
     ExperimentMetaConfig,
     HardwareConfig,
+    InitialStateConfig,
     OptimizerSettingsConfig,
     OutputConfig,
     SystemConfig,
+    VARIATIONAL_ALGORITHMS,
+    is_dynamics_algorithm,
+    is_variational_algorithm,
 )
 
 _REQUIRED_SECTIONS = (
     "experiment",
     "system",
     "algorithm",
-    "ansatz",
-    "optimizer",
     "backend",
     "hardware",
     "analysis",
@@ -33,13 +36,16 @@ _REQUIRED_SECTIONS = (
 )
 
 _SUPPORTED = {
-    "experiment_type": {"single_point", "sweep"},
+    "experiment_type": {"single_point", "sweep", "trotter_validation"},
     "system": {"tfim"},
-    "algorithm": {"vqe", "vqd"},
+    "algorithm": VARIATIONAL_ALGORITHMS | DYNAMICS_ALGORITHMS,
     "ansatz": {"hardware_efficient"},
     "optimizer": {"scipy"},
-    "backend": {"statevector"},
+    "backend": {"statevector", "statevector_evolver"},
     "observables": {"tfim_default"},
+    "initial_state": {"computational"},
+    "evolution_method": {"lie", "strang"},
+    "sweep_parameter": {"h", "evolution_time", "num_trotter_steps"},
 }
 
 
@@ -49,6 +55,17 @@ def _section(raw: dict[str, Any], key: str) -> dict[str, Any]:
     section = raw[key]
     if not isinstance(section, dict):
         raise ValueError(f"Config section '{key}' must be a mapping.")
+    return section
+
+
+def _optional_section(raw: dict[str, Any], key: str) -> dict[str, Any] | None:
+    if key not in raw:
+        return None
+    section = raw[key]
+    if section is None:
+        return None
+    if not isinstance(section, dict):
+        raise ValueError(f"Config section '{key}' must be a mapping when present.")
     return section
 
 
@@ -65,6 +82,36 @@ def _named_section(raw: dict[str, Any], key: str, supported: set[str]) -> tuple[
     if not isinstance(parameters, dict):
         raise ValueError(f"Section '{key}.parameters' must be a mapping.")
     return name, parameters
+
+
+def _validate_variational_sections(raw: dict[str, Any]) -> tuple[AnsatzConfig, OptimizerSettingsConfig]:
+    ansatz_name, ansatz_params = _named_section(raw, "ansatz", _SUPPORTED["ansatz"])
+    optimizer_name, optimizer_params = _named_section(
+        raw, "optimizer", _SUPPORTED["optimizer"]
+    )
+    return (
+        AnsatzConfig(name=ansatz_name, parameters=dict(ansatz_params)),
+        OptimizerSettingsConfig(
+            name=optimizer_name, parameters=dict(optimizer_params)
+        ),
+    )
+
+
+def _validate_dynamics_sections(raw: dict[str, Any]) -> InitialStateConfig:
+    initial_state_raw = _optional_section(raw, "initial_state")
+    if initial_state_raw is None:
+        return InitialStateConfig()
+
+    name = initial_state_raw.get("name", "computational")
+    if name not in _SUPPORTED["initial_state"]:
+        raise ValueError(
+            f"Unknown initial_state '{name}'. "
+            f"Supported: {', '.join(sorted(_SUPPORTED['initial_state']))}."
+        )
+    parameters = initial_state_raw.get("parameters") or {}
+    if not isinstance(parameters, dict):
+        raise ValueError("initial_state.parameters must be a mapping.")
+    return InitialStateConfig(name=name, parameters=dict(parameters))
 
 
 def load_config(path: str | Path) -> AtlasConfig:
@@ -99,17 +146,74 @@ def load_config(path: str | Path) -> AtlasConfig:
     if not isinstance(system_params, dict):
         raise ValueError("system.parameters must be a mapping.")
     sweep = system_raw.get("sweep")
-    if sweep is not None and not isinstance(sweep, dict):
-        raise ValueError("system.sweep must be a mapping when present.")
+    if sweep is not None:
+        if not isinstance(sweep, dict):
+            raise ValueError("system.sweep must be a mapping when present.")
+        sweep_parameter = sweep.get("parameter", "h")
+        if sweep_parameter not in _SUPPORTED["sweep_parameter"]:
+            raise ValueError(
+                f"Unknown sweep parameter '{sweep_parameter}'. "
+                f"Supported: {', '.join(sorted(_SUPPORTED['sweep_parameter']))}."
+            )
 
     algorithm_name, algorithm_params = _named_section(
         raw, "algorithm", _SUPPORTED["algorithm"]
     )
-    ansatz_name, ansatz_params = _named_section(raw, "ansatz", _SUPPORTED["ansatz"])
-    optimizer_name, optimizer_params = _named_section(
-        raw, "optimizer", _SUPPORTED["optimizer"]
-    )
+
+    if is_variational_algorithm(algorithm_name):
+        if "ansatz" not in raw:
+            raise ValueError(
+                f"Algorithm '{algorithm_name}' requires an 'ansatz' config section."
+            )
+        if "optimizer" not in raw:
+            raise ValueError(
+                f"Algorithm '{algorithm_name}' requires an 'optimizer' config section."
+            )
+        ansatz_config, optimizer_config = _validate_variational_sections(raw)
+    else:
+        ansatz_config = AnsatzConfig()
+        optimizer_config = OptimizerSettingsConfig()
+
+    if is_dynamics_algorithm(algorithm_name):
+        evolution_methods = algorithm_params.get("evolution_methods")
+        if evolution_methods is not None:
+            if not isinstance(evolution_methods, list) or not evolution_methods:
+                raise ValueError(
+                    "algorithm.parameters.evolution_methods must be a non-empty list."
+                )
+            for method in evolution_methods:
+                if method not in _SUPPORTED["evolution_method"]:
+                    raise ValueError(
+                        f"Unknown evolution_method '{method}' in evolution_methods. "
+                        f"Supported: {', '.join(sorted(_SUPPORTED['evolution_method']))}."
+                    )
+        else:
+            evolution_method = algorithm_params.get("evolution_method", "strang")
+            if evolution_method not in _SUPPORTED["evolution_method"]:
+                raise ValueError(
+                    f"Unknown evolution_method '{evolution_method}'. "
+                    f"Supported: {', '.join(sorted(_SUPPORTED['evolution_method']))}."
+                )
+        if exp_type == "trotter_validation":
+            step_values = algorithm_params.get("num_trotter_steps")
+            if not isinstance(step_values, list) or not step_values:
+                raise ValueError(
+                    "Experiment type 'trotter_validation' requires "
+                    "algorithm.parameters.num_trotter_steps as a non-empty list."
+                )
+        initial_state_config = _validate_dynamics_sections(raw)
+    else:
+        initial_state_config = None
+
     backend_name, backend_params = _named_section(raw, "backend", _SUPPORTED["backend"])
+    if is_variational_algorithm(algorithm_name) and backend_name != "statevector":
+        raise ValueError(
+            f"Variational algorithm '{algorithm_name}' requires backend 'statevector'."
+        )
+    if is_dynamics_algorithm(algorithm_name) and backend_name != "statevector_evolver":
+        raise ValueError(
+            f"Dynamics algorithm '{algorithm_name}' requires backend 'statevector_evolver'."
+        )
 
     hardware_raw = _section(raw, "hardware")
     analysis_raw = _section(raw, "analysis")
@@ -133,10 +237,8 @@ def load_config(path: str | Path) -> AtlasConfig:
             sweep=dict(sweep) if sweep else None,
         ),
         algorithm=AlgorithmConfig(name=algorithm_name, parameters=dict(algorithm_params)),
-        ansatz=AnsatzConfig(name=ansatz_name, parameters=dict(ansatz_params)),
-        optimizer=OptimizerSettingsConfig(
-            name=optimizer_name, parameters=dict(optimizer_params)
-        ),
+        ansatz=ansatz_config,
+        optimizer=optimizer_config,
         backend=BackendConfig(name=backend_name, parameters=dict(backend_params)),
         hardware=HardwareConfig(
             provider=hardware_raw.get("provider", "ibm_runtime"),
@@ -155,4 +257,5 @@ def load_config(path: str | Path) -> AtlasConfig:
             csv=bool(output_raw.get("csv", True)),
             plots=bool(output_raw.get("plots", True)),
         ),
+        initial_state=initial_state_config,
     )

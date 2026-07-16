@@ -28,8 +28,9 @@ atlas/
   algorithms/
     vqe.py                     # Multi-start VQE
     vqd.py                     # VQD built on VQE (overlap penalties)
+    hamiltonian_sim.py         # Product-formula Hamiltonian simulation
   optimization/                # Classical optimizers (SciPy COBYLA)
-  execution/                   # Statevector simulator and IBM Runtime
+  execution/                   # Statevector estimator, evolver, and IBM Runtime
   analysis/                    # Post-processing metrics
   visualization/
     tfim_plots.py              # VQE benchmark plots
@@ -49,6 +50,7 @@ Legacy scripts and benchmark data from the original monolithic implementation li
 - **Algorithms**
   - **VQE** — multi-start Variational Quantum Eigensolver
   - **VQD** — Variational Quantum Deflation reusing VQE's ground-state stage and shared optimization loop
+  - **Hamiltonian Simulation** — Trotter product formulas (Lie, Strang) with exact reference evolution
 - **Optimization** — COBYLA via SciPy, with configurable multi-start restarts
 - **Execution** — local statevector simulator and IBM Quantum Runtime (`EstimatorV2`)
 - **Experiments** — single-point runs and transverse-field (`h`) sweeps for VQE and VQD
@@ -106,6 +108,9 @@ To evaluate on IBM hardware, set `hardware.enabled: true` in the config (require
 | `configs/tfim_vqe_single.yaml` | single_point | VQE | One `(J, h)` point |
 | `configs/tfim_vqe.yaml` | sweep | VQE | `h` sweep with benchmark CSV and plots |
 | `configs/tfim_vqd.yaml` | single_point | VQD | Multi-state VQD with per-state error and fidelity |
+| `configs/tfim_hamiltonian_sim_single.yaml` | single_point | hamiltonian_sim | Single-point Trotter evolution |
+| `configs/tfim_hamiltonian_sim_time_sweep.yaml` | sweep | hamiltonian_sim | Evolution-time sweep with CSV and plots |
+| `configs/tfim_trotter_validation.yaml` | trotter_validation | hamiltonian_sim | Lie vs Strang Trotter validation plots |
 
 See [docs/atlas_component_extension_guide.md](docs/atlas_component_extension_guide.md) for how to register new Hamiltonians, ansätze, algorithms, backends, and experiments.
 
@@ -126,7 +131,7 @@ algorithm:
     num_states: 2
     beta: 1.0
 ```
-
+  
 See [docs/vqe_tfim.md](docs/vqe_tfim.md) for VQE theory, TFIM validation methodology, and benchmark discussion.
 
 ## Roadmap
