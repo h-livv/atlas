@@ -5,6 +5,11 @@ observables for a given ``(J, h)`` point, running the configured algorithm,
 computing fidelity/observable metrics, and optionally running or merging IBM
 hardware evaluation. Plotting and CSV writing are handled by
 ``atlas.experiments.outputs``.
+
+Architectural role:
+    Called by ``ConfiguredExperimentRunner`` after builders wire the algorithm.
+    Depends on physics builders and analysis metrics; does not own classical
+    optimization internals (those live in ``atlas.algorithms``).
 """
 
 from __future__ import annotations
@@ -32,11 +37,31 @@ from atlas.io.csv_io import load_hardware_results
 
 
 def _optional_float(value) -> Optional[float]:
-    """Convert a pandas cell to ``float``, mapping missing/NaN values to ``None``."""
+    """Convert a pandas cell to ``float``, mapping missing/NaN values to ``None``.
+
+    Purpose:
+        Hardware CSV columns for stderr may be empty or NaN; callers want
+        ``Optional[float]`` rather than crashing on missing data.
+
+    Inputs:
+        value: Cell value from a DataFrame (may be ``None``, NaN, or numeric).
+
+    Process:
+        Return ``None`` for ``None`` or NaN (detected via ``value != value``).
+        Otherwise cast to ``float``. TypeErrors during NaN checks are ignored
+        so non-numeric types still attempt ``float(value)``.
+
+    Outputs:
+        ``float`` or ``None``.
+
+    Side effects:
+        None.
+    """
 
     if value is None:
         return None
     try:
+        # NaN is the unique float with value != value.
         if value != value:
             return None
     except TypeError:
@@ -45,9 +70,35 @@ def _optional_float(value) -> Optional[float]:
 
 
 class TFIMExperiment:
-    """TFIM experiment workflow using YAML-configured components."""
+    """TFIM experiment workflow using YAML-configured components.
+
+    Responsibility:
+        For each transverse-field Ising point ``(J, h)``, build the model and
+        ansatz, run VQE or VQD against exact diagonalization references,
+        compute fidelity/observables, and optionally evaluate on hardware or
+        merge offline hardware CSV rows into sweep results.
+
+    State:
+        config: ``AtlasConfig`` driving builders and analysis flags.
+        algorithm: Injected ``VQE`` or ``VQD`` instance.
+        num_qubits: From ``config.system.parameters``.
+        resilience_level: IBM Runtime resilience setting for hardware eval.
+        compute_fidelity: Whether to compute state fidelity (else NaN).
+
+    Usage:
+        Construct via ``build_experiment`` / factory helpers. Call
+        ``run_single_point`` / ``run_single_point_vqd`` or the sweep variants.
+        Do not call plotting/CSV writers from here.
+    """
 
     def __init__(self, config: AtlasConfig, algorithm):
+        """Store config, algorithm, and cached analysis/hardware settings.
+
+        Inputs:
+            config: Full experiment configuration.
+            algorithm: Configured ``VQE`` or ``VQD`` instance.
+        """
+
         self.config = config
         self.algorithm = algorithm
         self.num_qubits = int(config.system.parameters["num_qubits"])
@@ -55,6 +106,26 @@ class TFIMExperiment:
         self.compute_fidelity = config.analysis.fidelity
 
     def _build_point_context(self, J: float, h: float):
+        """Build Hamiltonian, ansatz, and observables for one ``(J, h)`` point.
+
+        Purpose:
+            Share identical construction between VQE and VQD entry points.
+
+        Inputs:
+            J: Coupling strength override for this point.
+            h: Transverse field override for this point.
+
+        Process:
+            Call builders with parameter overrides for ``J``/``h`` and the
+            experiment's qubit count.
+
+        Outputs:
+            Tuple ``(hamiltonian, ansatz, observables)``.
+
+        Side effects:
+            None.
+        """
+
         hamiltonian = build_hamiltonian(
             self.config, parameter_overrides={"J": J, "h": h}
         )
@@ -69,7 +140,32 @@ class TFIMExperiment:
         mode: str = "sim",
         backend=None,
     ) -> TFIMPointResult:
-        """Run exact diagonalization + VQE (and optionally hardware) for one point."""
+        """Run exact diagonalization + VQE (and optionally hardware) for one point.
+
+        Purpose:
+            Produce a complete ``TFIMPointResult`` comparing classical ground
+            truth to the variational estimate (and optional hardware energy).
+
+        Inputs:
+            J: Ising coupling.
+            h: Transverse field.
+            mode: ``"sim"`` (default) or ``"hardware"``.
+            backend: Required when ``mode="hardware"``.
+
+        Process:
+            Build point context; exact ground state; run VQE; bind optimal
+            parameters and form a statevector; optionally compute fidelity
+            and always compute sim observables; if hardware mode, evaluate
+            energy/observables via ``IBMRuntimeEstimator``.
+
+        Outputs:
+            ``TFIMPointResult``.
+
+        Side effects:
+            Runs classical diagonalization and VQE optimization; may submit
+            IBM Runtime jobs in hardware mode. Raises ``ValueError`` for
+            invalid mode/backend combinations.
+        """
 
         if mode not in ("sim", "hardware"):
             raise ValueError(f"Unknown mode '{mode}'; expected 'sim' or 'hardware'.")
@@ -118,7 +214,31 @@ class TFIMExperiment:
         mode: str = "sim",
         backend=None,
     ) -> TFIMVQDPointResult:
-        """Run exact spectrum + VQD (and optionally hardware on ground state)."""
+        """Run exact spectrum + VQD (and optionally hardware on ground state).
+
+        Purpose:
+            Compare several low-lying exact eigenpairs to sequential VQD
+            states, plus ground-state observables (and optional hardware).
+
+        Inputs:
+            J: Ising coupling.
+            h: Transverse field.
+            mode: ``"sim"`` or ``"hardware"``.
+            backend: Required for hardware mode.
+
+        Process:
+            Exact spectrum for ``algorithm.num_states``; run VQD; per state,
+            compute absolute energy error and optional fidelity; evaluate
+            observables on the VQD ground state; hardware evaluation (if any)
+            uses only ground-state optimal parameters.
+
+        Outputs:
+            ``TFIMVQDPointResult``.
+
+        Side effects:
+            Multiple VQE-like optimizations inside VQD; optional hardware job.
+            Raises ``ValueError`` for invalid mode/backend.
+        """
 
         if mode not in ("sim", "hardware"):
             raise ValueError(f"Unknown mode '{mode}'; expected 'sim' or 'hardware'.")
@@ -182,7 +302,32 @@ class TFIMExperiment:
         hardware_source: Optional[str] = None,
         backend=None,
     ) -> TFIMBenchmarkResult:
-        """Run VQE for every ``h`` in ``h_values``."""
+        """Run VQE for every ``h`` in ``h_values``.
+
+        Purpose:
+            Produce a benchmark curve of energies/fidelities vs transverse
+            field at fixed ``J``.
+
+        Inputs:
+            J: Fixed coupling.
+            h_values: Sequence of transverse-field values.
+            include_hardware: If True and ``backend`` is set, each point runs
+                in hardware mode.
+            hardware_source: Optional path to offline hardware CSV to merge
+                after the sim (or live) sweep.
+            backend: IBM backend for live hardware points.
+
+        Process:
+            Loop ``run_single_point`` with mode hardware or sim; then merge
+            CSV hardware rows when ``hardware_source`` is provided.
+
+        Outputs:
+            ``TFIMBenchmarkResult`` collecting all points.
+
+        Side effects:
+            Many VQE runs; optional live hardware jobs; may read a CSV via
+            ``_merge_hardware_csv``.
+        """
 
         live_hardware = include_hardware and backend is not None
 
@@ -207,7 +352,29 @@ class TFIMExperiment:
         hardware_source: Optional[str] = None,
         backend=None,
     ) -> TFIMVQDBenchmarkResult:
-        """Run VQD for every ``h`` in ``h_values``."""
+        """Run VQD for every ``h`` in ``h_values``.
+
+        Purpose:
+            Benchmark low-lying spectrum recovery across a transverse-field
+            sweep.
+
+        Inputs:
+            J: Fixed coupling.
+            h_values: Transverse-field grid.
+            include_hardware: Live hardware when True and ``backend`` set.
+            hardware_source: Accepted for API symmetry with VQE sweep; not
+                merged in the current implementation.
+            backend: IBM backend for live evaluation.
+
+        Process:
+            Loop ``run_single_point_vqd`` with hardware or sim mode.
+
+        Outputs:
+            ``TFIMVQDBenchmarkResult``.
+
+        Side effects:
+            Many VQD runs; optional hardware jobs. Does not merge CSV today.
+        """
 
         live_hardware = include_hardware and backend is not None
 
@@ -224,6 +391,29 @@ class TFIMExperiment:
         return TFIMVQDBenchmarkResult(points=points)
 
     def _merge_hardware_csv(self, points, hardware_source: Optional[str]) -> None:
+        """Attach offline hardware CSV rows onto matching sweep points in place.
+
+        Purpose:
+            Allow plotting/hardware-error summaries without re-running jobs,
+            by joining previously saved IBM results on the ``h`` column.
+
+        Inputs:
+            points: Mutable list of ``TFIMPointResult`` (modified in place).
+            hardware_source: CSV path, or ``None`` to no-op.
+
+        Process:
+            Load the CSV; for each point with a matching ``h`` row, overwrite
+            ``point.hardware_result`` with energy/observables/stderr fields
+            and ``backend="csv"``.
+
+        Outputs:
+            None.
+
+        Side effects:
+            Mutates ``points``; reads from the filesystem when
+            ``hardware_source`` is set.
+        """
+
         if hardware_source is None:
             return
 

@@ -1,4 +1,15 @@
-"""Save experiment outputs (CSV, plots) based on configuration."""
+"""Save experiment outputs (CSV, plots) based on configuration.
+
+After ``run_experiment`` returns an ``ExperimentRunResult``, this module
+creates a timestamped run directory, optionally writes CSVs, generates
+plots, and prints human-readable summaries. It does not run algorithms;
+it only persists and reports what experiments already computed.
+
+Architectural role:
+    Terminal side of the pipeline: depends on result containers, I/O helpers,
+    and visualization modules. Experiment workflows should not import this
+    module (keep computation separate from presentation).
+"""
 
 from __future__ import annotations
 
@@ -26,7 +37,25 @@ from atlas.visualization.tfim_vqd_plots import plot_all_tfim_vqd, plot_vqd_singl
 
 
 def resolve_run_output_dir(config: AtlasConfig) -> str:
-    """Create a unique run directory under the configured output base path."""
+    """Create a unique run directory under the configured output base path.
+
+    Purpose:
+        Avoid overwriting previous runs by appending a timestamp to the
+        experiment name.
+
+    Inputs:
+        config: Uses ``output.output_dir`` and ``experiment.name`` (falls
+            back to ``{system}_{algorithm}`` when name is empty).
+
+    Process:
+        Build ``{base}/{name}_{YYYYMMDD_HHMMSS}`` and ``makedirs``.
+
+    Outputs:
+        Absolute or relative path string of the created directory.
+
+    Side effects:
+        Creates directories on disk.
+    """
 
     base_dir = config.output.output_dir
     name = config.experiment.name or f"{config.system.name}_{config.algorithm.name}"
@@ -37,7 +66,24 @@ def resolve_run_output_dir(config: AtlasConfig) -> str:
 
 
 def save_outputs(run: ExperimentRunResult) -> None:
-    """Write configured outputs for a completed experiment run."""
+    """Write configured outputs for a completed experiment run.
+
+    Purpose:
+        Dispatch to type-specific save helpers based on the result class.
+
+    Inputs:
+        run: ``ExperimentRunResult`` from ``run_experiment``.
+
+    Process:
+        Resolve a fresh run directory, print its path, then branch on
+        ``isinstance`` for VQE/VQD/sim point, benchmark, and validation.
+
+    Outputs:
+        None.
+
+    Side effects:
+        May write CSVs, generate plots, and print summaries to stdout.
+    """
 
     config: AtlasConfig = run.config
     result = run.result
@@ -62,6 +108,27 @@ def save_outputs(run: ExperimentRunResult) -> None:
 
 
 def _save_vqe_benchmark(config: AtlasConfig, result: TFIMBenchmarkResult, output_dir: str) -> None:
+    """Persist VQE sweep CSV/plots and print a benchmark summary.
+
+    Purpose:
+        Honor ``config.output.csv`` / ``.plots`` for TFIM VQE benchmarks.
+
+    Inputs:
+        config: Output flags and system labels for the summary.
+        result: Sweep results.
+        output_dir: Destination directory for this run.
+
+    Process:
+        Optionally write ``tfim_benchmark.csv`` and call ``plot_all_tfim``;
+        always print the tabular summary.
+
+    Outputs:
+        None.
+
+    Side effects:
+        Filesystem writes and stdout.
+    """
+
     if config.output.csv:
         csv_path = os.path.join(output_dir, "tfim_benchmark.csv")
         write_tfim_benchmark(result, csv_path)
@@ -77,6 +144,27 @@ def _save_vqe_benchmark(config: AtlasConfig, result: TFIMBenchmarkResult, output
 def _save_vqe_single_point(
     config: AtlasConfig, point: TFIMPointResult, output_dir: str
 ) -> None:
+    """Print a VQE single-point summary and optionally plot it.
+
+    Purpose:
+        Present one-shot VQE results without requiring a CSV (single points
+        are summarized on the console).
+
+    Inputs:
+        config: System parameters for labeling.
+        point: Single-point result.
+        output_dir: Plot destination when enabled.
+
+    Process:
+        Print metrics; if plots are enabled, call ``plot_vqe_single_point``.
+
+    Outputs:
+        None.
+
+    Side effects:
+        Stdout; optional plot files.
+    """
+
     _print_vqe_single_point(point, config)
 
     if config.output.plots:
@@ -87,6 +175,26 @@ def _save_vqe_single_point(
 def _save_vqd_single_point(
     config: AtlasConfig, point: TFIMVQDPointResult, output_dir: str
 ) -> None:
+    """Print a VQD single-point summary and optionally plot it.
+
+    Purpose:
+        Present per-state exact vs VQD comparison for one field value.
+
+    Inputs:
+        config: System parameters for labeling.
+        point: VQD point result.
+        output_dir: Plot destination when enabled.
+
+    Process:
+        Print the state table; optionally call ``plot_vqd_single_point``.
+
+    Outputs:
+        None.
+
+    Side effects:
+        Stdout; optional plot files.
+    """
+
     _print_vqd_single_point(point, config)
 
     if config.output.plots:
@@ -97,6 +205,28 @@ def _save_vqd_single_point(
 def _save_vqd_benchmark(
     config: AtlasConfig, result: TFIMVQDBenchmarkResult, output_dir: str
 ) -> None:
+    """Persist VQD sweep summary, optional CSV, and optional plots.
+
+    Purpose:
+        Handle VQD benchmark outputs (CSV written locally here rather than
+        via ``csv_io`` helpers used for VQE).
+
+    Inputs:
+        config: Output flags.
+        result: VQD sweep results.
+        output_dir: Destination directory.
+
+    Process:
+        Print summary; optionally write ``tfim_vqd_benchmark.csv`` and call
+        ``plot_all_tfim_vqd``.
+
+    Outputs:
+        None.
+
+    Side effects:
+        Stdout; optional CSV and plots.
+    """
+
     _print_vqd_benchmark(result, config)
 
     if config.output.csv:
@@ -108,6 +238,27 @@ def _save_vqd_benchmark(
 
 
 def _print_vqe_single_point(point: TFIMPointResult, config: AtlasConfig) -> None:
+    """Print a formatted VQE single-shot results block to stdout.
+
+    Purpose:
+        Give operators an immediate exact-vs-VQE comparison without opening
+        plot files.
+
+    Inputs:
+        point: Completed VQE point.
+        config: System parameters for the header.
+
+    Process:
+        Compute absolute energy error and print energy, iterations, and
+        rounded optimal parameters.
+
+    Outputs:
+        None.
+
+    Side effects:
+        Writes to stdout.
+    """
+
     params = config.system.parameters
     vqe_result = point.vqe_result
     error = abs(point.exact_energy - vqe_result.energy)
@@ -125,6 +276,28 @@ def _print_vqe_single_point(point: TFIMPointResult, config: AtlasConfig) -> None
 
 
 def _print_vqe_benchmark_summary(result: TFIMBenchmarkResult, config: AtlasConfig) -> None:
+    """Print per-point and aggregate VQE sweep statistics.
+
+    Purpose:
+        Summarize fidelity and energy error across ``h``, plus optional
+        hardware error stats when hardware rows are present.
+
+    Inputs:
+        result: VQE benchmark collection.
+        config: System parameters (``J``, qubit count) for headers.
+
+    Process:
+        Print a table of ``h/J``, ΔE, fidelity, and iterations; then mean/max
+        fidelity and sim absolute error; if any points have hardware, print
+        absolute and relative hardware error aggregates.
+
+    Outputs:
+        None.
+
+    Side effects:
+        Writes to stdout.
+    """
+
     J = float(config.system.parameters["J"])
     h_values = result.h_values
 
@@ -170,6 +343,27 @@ def _print_vqe_benchmark_summary(result: TFIMBenchmarkResult, config: AtlasConfi
 
 
 def _print_vqd_single_point(point: TFIMVQDPointResult, config: AtlasConfig) -> None:
+    """Print a per-state VQD comparison table for one point.
+
+    Purpose:
+        Show exact vs VQD energy, absolute error, and fidelity for each
+        recovered eigenstate.
+
+    Inputs:
+        point: VQD point result.
+        config: System parameters for the header.
+
+    Process:
+        Zip exact energies, VQD state results, errors, and fidelities into
+        a formatted table.
+
+    Outputs:
+        None.
+
+    Side effects:
+        Writes to stdout.
+    """
+
     params = config.system.parameters
     num_states = len(point.vqd_result.states)
 
@@ -199,6 +393,26 @@ def _print_vqd_single_point(point: TFIMVQDPointResult, config: AtlasConfig) -> N
 
 
 def _print_vqd_benchmark(result: TFIMVQDBenchmarkResult, config: AtlasConfig) -> None:
+    """Print nested VQD sweep results (per ``h``, per state).
+
+    Purpose:
+        Console overview of spectrum recovery across a transverse-field sweep.
+
+    Inputs:
+        result: VQD benchmark collection.
+        config: System parameters for the header.
+
+    Process:
+        For each point, print ``h`` then one line per state with exact/VQD
+        energy, absolute error, and fidelity.
+
+    Outputs:
+        None.
+
+    Side effects:
+        Writes to stdout.
+    """
+
     J = float(config.system.parameters["J"])
     print("=" * 50)
     print(f" {config.system.parameters['num_qubits']}-Qubit TFIM VQD Benchmark Sweep")
@@ -222,6 +436,26 @@ def _print_vqd_benchmark(result: TFIMVQDBenchmarkResult, config: AtlasConfig) ->
 
 
 def _write_vqd_benchmark_csv(result: TFIMVQDBenchmarkResult, output_dir: str) -> None:
+    """Write a long-form CSV with one row per (h, state_index).
+
+    Purpose:
+        Export VQD sweep metrics for external analysis without a dedicated
+        ``csv_io`` writer yet.
+
+    Inputs:
+        result: VQD benchmark collection.
+        output_dir: Directory for ``tfim_vqd_benchmark.csv``.
+
+    Process:
+        Flatten points × states into row dicts; write via pandas.
+
+    Outputs:
+        None.
+
+    Side effects:
+        Creates ``output_dir`` if needed; writes a CSV; prints its path.
+    """
+
     import pandas as pd
 
     os.makedirs(output_dir, exist_ok=True)
@@ -255,6 +489,26 @@ def _write_vqd_benchmark_csv(result: TFIMVQDBenchmarkResult, output_dir: str) ->
 def _save_sim_single_point(
     config: AtlasConfig, point: SimPointResult, output_dir: str
 ) -> None:
+    """Print a dynamics single-point summary and optionally plot it.
+
+    Purpose:
+        Present fidelity, depth, and per-observable errors for one evolution.
+
+    Inputs:
+        config: System parameters for labeling.
+        point: Simulation point result.
+        output_dir: Plot destination when enabled.
+
+    Process:
+        Print results; optionally call ``plot_sim_single_point``.
+
+    Outputs:
+        None.
+
+    Side effects:
+        Stdout; optional plots.
+    """
+
     _print_sim_single_point(point, config)
 
     if config.output.plots:
@@ -265,6 +519,28 @@ def _save_sim_single_point(
 def _save_sim_benchmark(
     config: AtlasConfig, result: SimBenchmarkResult, output_dir: str
 ) -> None:
+    """Persist dynamics sweep CSV/plots and print a summary.
+
+    Purpose:
+        Honor output flags for Hamiltonian-simulation benchmarks.
+
+    Inputs:
+        config: Output flags and system labels.
+        result: Simulation benchmark collection.
+        output_dir: Destination directory.
+
+    Process:
+        Print summary; optionally write ``sim_benchmark.csv`` and call
+        ``plot_all_sim``. When the sweep axis is ``num_trotter_steps``, also
+        emit a validation-style comparison plot for the single series.
+
+    Outputs:
+        None.
+
+    Side effects:
+        Stdout; optional CSV and plots.
+    """
+
     _print_sim_benchmark(result, config)
 
     if config.output.csv:
@@ -275,11 +551,31 @@ def _save_sim_benchmark(
     if config.output.plots:
         plot_all_sim(result, output_dir)
         if result.sweep_parameter == "num_trotter_steps":
+            # A lone step-sweep is still useful as a validation-style curve.
             plot_validation_comparison([result], output_dir)
         print(f"Plots saved to: {output_dir}")
 
 
 def _print_sim_single_point(point: SimPointResult, config: AtlasConfig) -> None:
+    """Print fidelity, depth, and observable errors for one dynamics point.
+
+    Purpose:
+        Console summary of exact vs simulated expectations.
+
+    Inputs:
+        point: Simulation point result.
+        config: System parameters for the header.
+
+    Process:
+        Print method/steps and per-observable sim/exact/abs_error lines.
+
+    Outputs:
+        None.
+
+    Side effects:
+        Writes to stdout.
+    """
+
     params = config.system.parameters
     sim = point.sim_result
 
@@ -302,6 +598,26 @@ def _print_sim_single_point(point: SimPointResult, config: AtlasConfig) -> None:
 
 
 def _print_sim_benchmark(result: SimBenchmarkResult, config: AtlasConfig) -> None:
+    """Print a dynamics sweep table and mean/max fidelity summary.
+
+    Purpose:
+        Quick overview of how fidelity and depth track the swept parameter.
+
+    Inputs:
+        result: Simulation benchmark collection.
+        config: System parameters for the header.
+
+    Process:
+        Print one row per point (sweep value, fidelity, depth, method), then
+        aggregate fidelity statistics.
+
+    Outputs:
+        None.
+
+    Side effects:
+        Writes to stdout.
+    """
+
     J = float(config.system.parameters["J"])
     print("=" * 50)
     print(
@@ -332,6 +648,27 @@ def _print_sim_benchmark(result: SimBenchmarkResult, config: AtlasConfig) -> Non
 def _save_sim_validation(
     config: AtlasConfig, result: SimValidationResult, output_dir: str
 ) -> None:
+    """Persist Trotter validation CSV/plots and print per-method tables.
+
+    Purpose:
+        Save multi-method step sweeps used to compare product formulas.
+
+    Inputs:
+        config: Output flags and qubit count for headers.
+        result: Validation result with one series per method.
+        output_dir: Destination directory.
+
+    Process:
+        Print validation tables; optionally write ``sim_validation.csv`` and
+        call ``plot_validation_result``.
+
+    Outputs:
+        None.
+
+    Side effects:
+        Stdout; optional CSV and plots.
+    """
+
     _print_sim_validation(result, config)
 
     if config.output.csv:
@@ -345,6 +682,26 @@ def _save_sim_validation(
 
 
 def _print_sim_validation(result: SimValidationResult, config: AtlasConfig) -> None:
+    """Print per-method Trotter-step fidelity and max operator error tables.
+
+    Purpose:
+        Console view of how each evolution method converges with steps.
+
+    Inputs:
+        result: Validation result.
+        config: System parameters for the header (qubit count).
+
+    Process:
+        Print fixed ``J``, ``h``, time, and method list; then for each series
+        a table of steps / fidelity / max op error / depth.
+
+    Outputs:
+        None.
+
+    Side effects:
+        Writes to stdout.
+    """
+
     print("=" * 50)
     print(
         f" {config.system.parameters['num_qubits']}-Qubit TFIM Trotter Validation"

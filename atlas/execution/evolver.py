@@ -1,8 +1,8 @@
-"""Local statevector evolver for Hamiltonian simulation circuits.
+"""Exact local simulation of parameter-free evolution circuits.
 
-Distinct from ``estimator.py``: evolution runs a complete circuit once and
-returns the final statevector rather than evaluating repeated expectation
-values during optimization.
+Distinct from estimators: an evolver runs a *complete* circuit once and
+returns the final statevector. That matches Hamiltonian simulation, where
+the product-formula circuit is already fully bound (no variational θ).
 """
 
 from __future__ import annotations
@@ -16,17 +16,57 @@ from qiskit.quantum_info import Statevector
 
 @dataclass
 class EvolutionResult:
-    """Outcome of evolving a circuit to its final statevector."""
+    """Final amplitudes after simulating an evolution circuit.
+
+    Responsibility:
+        Carry the dense state produced by ``StatevectorEvolver`` so algorithms
+        can package a ``SimulationResult`` without depending on Qiskit types.
+
+    State:
+        statevector: Complex amplitude array of length ``2 ** num_qubits``.
+        num_qubits: Register size taken from the simulated circuit.
+
+    Usage:
+        Returned by ``StatevectorEvolver.evolve``; consumed immediately by
+        ``HamiltonianSimulation.run``.
+    """
 
     statevector: np.ndarray
     num_qubits: int
 
 
 class StatevectorEvolver:
-    """Evolves a quantum circuit via exact statevector simulation."""
+    """Simulate a fully bound circuit and return its final statevector.
+
+    Responsibility:
+        Provide the dynamics execution primitive (ideal, noiseless).
+
+    State:
+        Stateless — no instance fields; safe to reuse across many runs.
+
+    Usage:
+        Built when ``backend.name == \"statevector_evolver\"``. Injected into
+        ``HamiltonianSimulation``.
+    """
 
     def evolve(self, circuit: QuantumCircuit) -> EvolutionResult:
-        """Simulate ``circuit`` and return the final statevector."""
+        """Classically simulate ``circuit`` and return final amplitudes.
+
+        Purpose:
+            Evaluate a Trotterized evolution circuit exactly (as a statevector).
+
+        Inputs:
+            circuit: Parameter-free preparation + evolution circuit.
+
+        Process:
+            Construct Qiskit ``Statevector(circuit)`` and convert to ``numpy``.
+
+        Outputs:
+            ``EvolutionResult`` with amplitudes and qubit count.
+
+        Side effects:
+            Ideal simulation; memory scales as ``2 ** n``. No I/O.
+        """
 
         statevector = np.asarray(Statevector(circuit))
         return EvolutionResult(

@@ -1,4 +1,10 @@
-"""Load Atlas experiment configuration from YAML files."""
+"""Load Atlas experiment configuration from YAML files.
+
+This module is the only place that interprets raw YAML into typed
+``AtlasConfig`` objects. It validates required sections, allow-listed
+component names, and algorithm-specific requirements (ansatz for VQE,
+evolver backend for dynamics, etc.) before any experiment code runs.
+"""
 
 from __future__ import annotations
 
@@ -25,6 +31,8 @@ from atlas.config import (
     is_variational_algorithm,
 )
 
+# Every experiment YAML must declare these top-level keys so builders never
+# see a partially specified config.
 _REQUIRED_SECTIONS = (
     "experiment",
     "system",
@@ -35,6 +43,8 @@ _REQUIRED_SECTIONS = (
     "output",
 )
 
+# Allow-lists keep unsupported names failing fast with a clear message.
+# Builders re-check the same names when constructing objects.
 _SUPPORTED = {
     "experiment_type": {"single_point", "sweep", "trotter_validation"},
     "system": {"tfim"},
@@ -50,6 +60,25 @@ _SUPPORTED = {
 
 
 def _section(raw: dict[str, Any], key: str) -> dict[str, Any]:
+    """Return a required mapping section from the raw YAML root.
+
+    Purpose:
+        Fail early when a mandatory section is missing or mistyped.
+
+    Inputs:
+        raw: Top-level YAML mapping.
+        key: Section name to extract.
+
+    Process:
+        Look up ``key``; verify the value is a ``dict``.
+
+    Outputs:
+        The section mapping.
+
+    Side effects:
+        None (raises ``ValueError`` on invalid input).
+    """
+
     if key not in raw:
         raise ValueError(f"Missing required config section '{key}'.")
     section = raw[key]
@@ -59,6 +88,27 @@ def _section(raw: dict[str, Any], key: str) -> dict[str, Any]:
 
 
 def _optional_section(raw: dict[str, Any], key: str) -> dict[str, Any] | None:
+    """Return an optional mapping section, or ``None`` if absent.
+
+    Purpose:
+        Support sections that only some algorithm families need (e.g.
+        ``initial_state`` for dynamics).
+
+    Inputs:
+        raw: Top-level YAML mapping.
+        key: Section name that may be omitted.
+
+    Process:
+        If missing or explicitly ``null``, return ``None``; otherwise require
+        a mapping.
+
+    Outputs:
+        The section dict, or ``None``.
+
+    Side effects:
+        None (raises ``ValueError`` if present but not a mapping).
+    """
+
     if key not in raw:
         return None
     section = raw[key]
@@ -70,6 +120,28 @@ def _optional_section(raw: dict[str, Any], key: str) -> dict[str, Any] | None:
 
 
 def _named_section(raw: dict[str, Any], key: str, supported: set[str]) -> tuple[str, dict]:
+    """Extract ``name`` and ``parameters`` from a named component section.
+
+    Purpose:
+        Most Atlas components are selected by a string name plus a free-form
+        parameters dict; this helper standardizes that pattern.
+
+    Inputs:
+        raw: Top-level YAML mapping.
+        key: Section name (e.g. ``\"algorithm\"``).
+        supported: Allow-list of valid ``name`` values.
+
+    Process:
+        Require the section, require ``name`` ∈ ``supported``, coerce missing
+        ``parameters`` to ``{}``, and verify ``parameters`` is a mapping.
+
+    Outputs:
+        ``(name, parameters_dict)``.
+
+    Side effects:
+        None (raises ``ValueError`` on invalid input).
+    """
+
     section = _section(raw, key)
     name = section.get("name")
     if not name:
@@ -85,6 +157,27 @@ def _named_section(raw: dict[str, Any], key: str, supported: set[str]) -> tuple[
 
 
 def _validate_variational_sections(raw: dict[str, Any]) -> tuple[AnsatzConfig, OptimizerSettingsConfig]:
+    """Validate and build ansatz/optimizer configs for VQE/VQD.
+
+    Purpose:
+        Variational algorithms need a parameterized circuit and a classical
+        optimizer; this packages those YAML sections into typed configs.
+
+    Inputs:
+        raw: Top-level YAML mapping that must contain ``ansatz`` and
+            ``optimizer`` sections.
+
+    Process:
+        Parse each named section against the allow-lists and construct
+        dataclass instances (copying parameters so later mutation is safe).
+
+    Outputs:
+        ``(AnsatzConfig, OptimizerSettingsConfig)``.
+
+    Side effects:
+        None.
+    """
+
     ansatz_name, ansatz_params = _named_section(raw, "ansatz", _SUPPORTED["ansatz"])
     optimizer_name, optimizer_params = _named_section(
         raw, "optimizer", _SUPPORTED["optimizer"]
@@ -98,6 +191,26 @@ def _validate_variational_sections(raw: dict[str, Any]) -> tuple[AnsatzConfig, O
 
 
 def _validate_dynamics_sections(raw: dict[str, Any]) -> InitialStateConfig:
+    """Validate and build the initial-state config for dynamics experiments.
+
+    Purpose:
+        Hamiltonian simulation needs a pure starting state; default to the
+        computational all-zero state when the YAML omits the section.
+
+    Inputs:
+        raw: Top-level YAML mapping.
+
+    Process:
+        If ``initial_state`` is absent, return defaults. Otherwise validate
+        ``name`` against the allow-list and copy ``parameters``.
+
+    Outputs:
+        An ``InitialStateConfig``.
+
+    Side effects:
+        None.
+    """
+
     initial_state_raw = _optional_section(raw, "initial_state")
     if initial_state_raw is None:
         return InitialStateConfig()
@@ -115,7 +228,32 @@ def _validate_dynamics_sections(raw: dict[str, Any]) -> InitialStateConfig:
 
 
 def load_config(path: str | Path) -> AtlasConfig:
-    """Load and validate an ``AtlasConfig`` from a YAML file."""
+    """Load and validate an ``AtlasConfig`` from a YAML file.
+
+    Purpose:
+        Turn a human-edited experiment description into the typed object the
+        rest of Atlas consumes, rejecting unsupported combinations early.
+
+    Inputs:
+        path: Filesystem path to a YAML experiment file.
+
+    Process:
+        1. Parse YAML into a mapping.
+        2. Ensure all required top-level sections exist.
+        3. Validate experiment type, system, and algorithm names.
+        4. Branch: variational requires ansatz/optimizer; dynamics validates
+           evolution method(s), Trotter step lists for validation runs, and
+           initial state.
+        5. Enforce backend pairing (VQE/VQD ↔ ``statevector``, dynamics ↔
+           ``statevector_evolver``).
+        6. Validate hardware/analysis/output fields and assemble ``AtlasConfig``.
+
+    Outputs:
+        A fully populated ``AtlasConfig`` (intent only; no computed results).
+
+    Side effects:
+        Reads the YAML file from disk. Does not create output directories.
+    """
 
     config_path = Path(path)
     with config_path.open(encoding="utf-8") as handle:
@@ -160,6 +298,7 @@ def load_config(path: str | Path) -> AtlasConfig:
         raw, "algorithm", _SUPPORTED["algorithm"]
     )
 
+    # Variational paths need circuit + classical optimizer sections.
     if is_variational_algorithm(algorithm_name):
         if "ansatz" not in raw:
             raise ValueError(
@@ -171,10 +310,12 @@ def load_config(path: str | Path) -> AtlasConfig:
             )
         ansatz_config, optimizer_config = _validate_variational_sections(raw)
     else:
+        # Dynamics configs omit these; keep dataclass defaults for a complete AtlasConfig.
         ansatz_config = AnsatzConfig()
         optimizer_config = OptimizerSettingsConfig()
 
     if is_dynamics_algorithm(algorithm_name):
+        # Prefer an explicit method list (validation) over a single method name.
         evolution_methods = algorithm_params.get("evolution_methods")
         if evolution_methods is not None:
             if not isinstance(evolution_methods, list) or not evolution_methods:
@@ -194,6 +335,7 @@ def load_config(path: str | Path) -> AtlasConfig:
                     f"Unknown evolution_method '{evolution_method}'. "
                     f"Supported: {', '.join(sorted(_SUPPORTED['evolution_method']))}."
                 )
+        # Trotter validation compares accuracy across a step grid; require that grid here.
         if exp_type == "trotter_validation":
             step_values = algorithm_params.get("num_trotter_steps")
             if not isinstance(step_values, list) or not step_values:
@@ -206,6 +348,7 @@ def load_config(path: str | Path) -> AtlasConfig:
         initial_state_config = None
 
     backend_name, backend_params = _named_section(raw, "backend", _SUPPORTED["backend"])
+    # Estimators evaluate parameterized costs; evolvers return full statevectors.
     if is_variational_algorithm(algorithm_name) and backend_name != "statevector":
         raise ValueError(
             f"Variational algorithm '{algorithm_name}' requires backend 'statevector'."
@@ -253,6 +396,7 @@ def load_config(path: str | Path) -> AtlasConfig:
             fidelity=bool(analysis_raw.get("fidelity", True)),
         ),
         output=OutputConfig(
+            # YAML uses "directory"; the dataclass field is output_dir.
             output_dir=output_raw.get("directory", "atlas/data"),
             csv=bool(output_raw.get("csv", True)),
             plots=bool(output_raw.get("plots", True)),

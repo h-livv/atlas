@@ -20,7 +20,27 @@ from atlas.experiments.results import SimBenchmarkResult, SimValidationResult, T
 
 
 def _hardware_field(result: TFIMBenchmarkResult, getter) -> list:
-    """Apply `getter(hardware_result)` per point, or `NaN` when hardware is absent."""
+    """Apply `getter(hardware_result)` per point, or `NaN` when hardware is absent.
+
+    Purpose:
+        Keep hardware CSV columns aligned with simulator rows even when only
+        some (or no) points have hardware data.
+
+    Inputs:
+        result: Sweep container with per-point ``hardware_result`` fields.
+        getter: Callable that extracts one scalar/field from a
+            ``HardwareEvaluationResult``.
+
+    Process:
+        Walk points; if hardware is missing, emit ``np.nan`` so pandas keeps
+        a stable column schema.
+
+    Outputs:
+        A list parallel to ``result.points``.
+
+    Side effects:
+        None.
+    """
 
     values = []
     for point in result.points:
@@ -30,11 +50,32 @@ def _hardware_field(result: TFIMBenchmarkResult, getter) -> list:
 
 
 def write_tfim_benchmark(result: TFIMBenchmarkResult, path: str) -> None:
-    """Write `result` to a CSV matching the legacy `tfim_vis.py` benchmark schema."""
+    """Write `result` to a CSV matching the legacy `tfim_vis.py` benchmark schema.
+
+    Purpose:
+        Persist a VQE ``h``-sweep in a column layout expected by older analysis
+        scripts and plotting tools.
+
+    Inputs:
+        result: Aggregated TFIM VQE sweep.
+        path: Destination CSV filesystem path.
+
+    Process:
+        Collect exact/VQE energies and observables from accessors; fill hardware
+        columns via ``_hardware_field``; compute abs/relative errors only where
+        hardware energies exist.
+
+    Outputs:
+        None.
+
+    Side effects:
+        Writes a CSV file at ``path`` (overwrites if present).
+    """
 
     exact_energies = result.exact_energies
     hardware_energies = _hardware_field(result, lambda hw: hw.energy)
 
+    # Errors are only meaningful when a hardware energy was recorded for that h.
     abs_errors = [
         absolute_error(exact, hw_energy) if not np.isnan(hw_energy) else np.nan
         for exact, hw_energy in zip(exact_energies, hardware_energies)
@@ -74,16 +115,49 @@ def write_tfim_benchmark(result: TFIMBenchmarkResult, path: str) -> None:
 def load_hardware_results(path: str) -> pd.DataFrame:
     """Load a hardware results CSV (`h`, `energy`, `zz`, `x`, `*_stderr` columns).
 
-    Returns the raw `DataFrame` as-is; deciding how to merge it into
-    `TFIMPointResult`/`HardwareEvaluationResult` objects is the experiment
-    layer's responsibility.
+    Purpose:
+        Read offline hardware measurements so experiments can attach them to
+        simulator points without re-running jobs.
+
+    Inputs:
+        path: CSV path produced by a prior hardware run or external tool.
+
+    Process:
+        Delegate to ``pandas.read_csv``.
+
+    Outputs:
+        The raw ``DataFrame`` as-is; deciding how to merge it into
+        ``TFIMPointResult``/``HardwareEvaluationResult`` objects is the
+        experiment layer's responsibility.
+
+    Side effects:
+        Reads from disk.
     """
 
     return pd.read_csv(path)
 
 
 def write_sim_benchmark(result: SimBenchmarkResult, path: str) -> None:
-    """Write a Hamiltonian simulation sweep to CSV."""
+    """Write a Hamiltonian simulation sweep to CSV.
+
+    Purpose:
+        Persist fidelity and observable comparisons across a dynamics sweep
+        (time, field, or Trotter steps).
+
+    Inputs:
+        result: Sweep of ``SimPointResult`` values.
+        path: Destination CSV path.
+
+    Process:
+        Emit one row per point with fixed metadata columns, then expand
+        observable names into ``sim_*`` / ``exact_*`` / ``error_*`` columns.
+
+    Outputs:
+        None.
+
+    Side effects:
+        Writes a CSV file at ``path``.
+    """
 
     rows = []
     for point in result.points:
@@ -96,6 +170,8 @@ def write_sim_benchmark(result: SimBenchmarkResult, path: str) -> None:
             "num_trotter_steps": point.sim_result.num_trotter_steps,
             "circuit_depth": point.sim_result.circuit_depth,
         }
+        # Dynamic columns keep the schema aligned with whichever observables
+        # analysis requested (e.g. zz, x).
         for name, value in point.observables.items():
             row[f"sim_{name}"] = value
             row[f"exact_{name}"] = point.exact_observables[name]
@@ -106,7 +182,27 @@ def write_sim_benchmark(result: SimBenchmarkResult, path: str) -> None:
 
 
 def write_sim_validation(result: SimValidationResult, path: str) -> None:
-    """Write a multi-method Trotter validation result to CSV."""
+    """Write a multi-method Trotter validation result to CSV.
+
+    Purpose:
+        Flatten the method × step grid into one CSV for offline comparison
+        of Lie vs Strang (or other) product formulas.
+
+    Inputs:
+        result: Container whose ``series`` list holds one ``SimBenchmarkResult``
+            per evolution method.
+        path: Destination CSV path.
+
+    Process:
+        Nested loop over series and points; include ``max_operator_error`` and
+        per-observable error columns.
+
+    Outputs:
+        None.
+
+    Side effects:
+        Writes a CSV file at ``path``.
+    """
 
     rows = []
     for series in result.series:

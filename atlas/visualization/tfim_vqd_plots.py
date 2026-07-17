@@ -1,4 +1,18 @@
-"""VQD benchmark and single-point plots."""
+"""VQD benchmark and single-point plots.
+
+Passive plotting helpers for Variational Quantum Deflation (VQD) results on the
+TFIM. They consume already-computed ``TFIMVQDPointResult`` /
+``TFIMVQDBenchmarkResult`` objects and write PNG artifacts — they never run
+optimization, exact diagonalization, or hardware jobs.
+
+VQD recovers multiple low-lying eigenstates; these plots therefore loop over
+``result.num_states`` (or the states on a single point) and use a shared color
+palette so each state index stays visually consistent across energy, fidelity,
+and error figures.
+
+``matplotlib.use("Agg")`` is set before importing ``pyplot`` so these functions
+work in headless CI / server environments without a display.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +20,7 @@ import os
 
 import matplotlib
 
+# Agg is a non-interactive backend: required so plot scripts work without a GUI.
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
@@ -13,12 +28,39 @@ import numpy as np
 
 from atlas.experiments.results import TFIMVQDBenchmarkResult, TFIMVQDPointResult
 
+# Tiny floor added before semilogy so exact-zero errors remain visible on a log axis.
 _EPS = 1e-12
+# Stable per-state colors so state k looks the same across energy/fidelity/error plots.
 _STATE_COLORS = ["crimson", "darkorange", "forestgreen", "royalblue", "purple"]
 
 
 def plot_vqd_single_point(point: TFIMVQDPointResult, output_dir: str) -> None:
-    """Per-state energy, absolute error, and fidelity for a single VQD run."""
+    """Per-state energy, absolute error, and fidelity for a single VQD run.
+
+    Purpose:
+        Summarize one ``(h, J)`` VQD optimization as a three-panel figure:
+        exact vs VQD energies, absolute energy errors, and fidelities — one bar
+        group / bar per recovered state.
+
+    Inputs:
+        point: A ``TFIMVQDPointResult`` with ``exact_energies``,
+            ``vqd_result.states``, ``absolute_errors``, ``fidelities``, ``h``,
+            and ``J``.
+        output_dir: Directory for ``vqd_single_point_summary.png``. Created if
+            missing.
+
+    Process:
+        1. Ensure ``output_dir`` exists.
+        2. Collect per-state exact/VQD energies, errors, and fidelities.
+        3. Draw three subplots side by side and save a single summary PNG.
+
+    Outputs:
+        None. Writes ``vqd_single_point_summary.png`` under ``output_dir``.
+
+    Side Effects:
+        Creates ``output_dir`` if missing; creates/overwrites the PNG; allocates
+        and closes a matplotlib figure.
+    """
 
     os.makedirs(output_dir, exist_ok=True)
     num_states = len(point.vqd_result.states)
@@ -64,9 +106,35 @@ def plot_vqd_single_point(point: TFIMVQDPointResult, output_dir: str) -> None:
 
 
 def plot_vqd_energy(result: TFIMVQDBenchmarkResult, output_dir: str) -> None:
-    """Plot exact and VQD energies versus ``h/J`` for each state."""
+    """Plot exact and VQD energies versus ``h/J`` for each state.
+
+    Purpose:
+        Show how each recovered eigenstate's energy tracks the exact spectrum
+        across the transverse-field sweep.
+
+    Inputs:
+        result: A ``TFIMVQDBenchmarkResult`` with ``h_values``, ``num_states``,
+            and helpers ``state_exact_energies`` / ``state_vqd_energies``.
+            ``J`` is taken from the first point (default ``1.0`` if empty) so
+            the x-axis is plotted as the dimensionless ratio ``h/J``.
+        output_dir: Directory for ``vqd_energy_vs_hJ.png``.
+
+    Process:
+        1. Convert ``h_values`` to ``h/J``.
+        2. For each state index, plot exact (dashed) and VQD (markers) series
+           in a shared color from ``_STATE_COLORS``.
+        3. Style, save, and close.
+
+    Outputs:
+        None. Writes ``vqd_energy_vs_hJ.png`` under ``output_dir``.
+
+    Side Effects:
+        Creates/overwrites the PNG; allocates and closes a matplotlib figure.
+        Does not create ``output_dir`` (``plot_all_tfim_vqd`` does).
+    """
 
     h_values = result.h_values
+    # Use the sweep's J so the x-axis is the physical ratio h/J, not raw h.
     J = result.points[0].J if result.points else 1.0
     h_over_J = h_values / J
 
@@ -99,7 +167,26 @@ def plot_vqd_energy(result: TFIMVQDBenchmarkResult, output_dir: str) -> None:
 
 
 def plot_vqd_fidelity(result: TFIMVQDBenchmarkResult, output_dir: str) -> None:
-    """Plot per-state fidelity versus ``h/J``."""
+    """Plot per-state fidelity versus ``h/J``.
+
+    Purpose:
+        Show how faithfully each VQD state matches the corresponding exact
+        eigenstate across the transverse-field sweep.
+
+    Inputs:
+        result: A ``TFIMVQDBenchmarkResult`` with ``state_fidelities`` and the
+            same ``h``/``J`` layout as ``plot_vqd_energy``.
+        output_dir: Directory for ``vqd_fidelity_vs_hJ.png``.
+
+    Process:
+        Convert to ``h/J``, plot one fidelity curve per state, save, close.
+
+    Outputs:
+        None. Writes ``vqd_fidelity_vs_hJ.png`` under ``output_dir``.
+
+    Side Effects:
+        Creates/overwrites the PNG; allocates and closes a matplotlib figure.
+    """
 
     h_values = result.h_values
     J = result.points[0].J if result.points else 1.0
@@ -128,7 +215,26 @@ def plot_vqd_fidelity(result: TFIMVQDBenchmarkResult, output_dir: str) -> None:
 
 
 def plot_vqd_energy_errors(result: TFIMVQDBenchmarkResult, output_dir: str) -> None:
-    """Semilogy plot of per-state absolute energy error versus ``h/J``."""
+    """Semilogy plot of per-state absolute energy error versus ``h/J``.
+
+    Purpose:
+        Compare absolute energy error (VQD vs exact) for each recovered state
+        on a log-y scale so small errors remain visible.
+
+    Inputs:
+        result: A ``TFIMVQDBenchmarkResult`` with ``state_absolute_errors``.
+        output_dir: Directory for ``vqd_energy_error_vs_hJ.png``.
+
+    Process:
+        Convert to ``h/J``, ``semilogy`` each state's absolute errors plus
+        ``_EPS``, style, save, close.
+
+    Outputs:
+        None. Writes ``vqd_energy_error_vs_hJ.png`` under ``output_dir``.
+
+    Side Effects:
+        Creates/overwrites the PNG; allocates and closes a matplotlib figure.
+    """
 
     h_values = result.h_values
     J = result.points[0].J if result.points else 1.0
@@ -137,6 +243,7 @@ def plot_vqd_energy_errors(result: TFIMVQDBenchmarkResult, output_dir: str) -> N
     plt.figure(figsize=(8, 5))
     for state_index in range(result.num_states):
         color = _STATE_COLORS[state_index % len(_STATE_COLORS)]
+        # _EPS avoids log(0) / invisible points when the error is exactly zero.
         plt.semilogy(
             h_over_J,
             result.state_absolute_errors(state_index) + _EPS,
@@ -156,7 +263,28 @@ def plot_vqd_energy_errors(result: TFIMVQDBenchmarkResult, output_dir: str) -> N
 
 
 def plot_all_tfim_vqd(result: TFIMVQDBenchmarkResult, output_dir: str) -> None:
-    """Generate the default VQD sweep plot set."""
+    """Generate the default VQD sweep plot set.
+
+    Purpose:
+        Convenience entry point for experiment runners to dump energy,
+        fidelity, and absolute-error sweep plots after a VQD benchmark.
+
+    Inputs:
+        result: A ``TFIMVQDBenchmarkResult`` covering the full ``h`` sweep.
+        output_dir: Destination directory for the PNG artifacts.
+
+    Process:
+        1. Create ``output_dir`` if needed.
+        2. Call ``plot_vqd_energy``, ``plot_vqd_fidelity``, and
+           ``plot_vqd_energy_errors`` in that order.
+
+    Outputs:
+        None. Three PNG files under ``output_dir``.
+
+    Side Effects:
+        Creates ``output_dir`` if missing; delegates file writes and figure
+        lifecycle to the individual plot functions.
+    """
 
     os.makedirs(output_dir, exist_ok=True)
     plot_vqd_energy(result, output_dir)
