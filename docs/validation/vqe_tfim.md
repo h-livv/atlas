@@ -96,7 +96,7 @@ Initialize Parameters (θ)
 
 ## Atlas Architecture
 
-Atlas is a modular quantum simulation framework that decouples physical model description from algorithm execution and hardware backend details. Experiments are configured via YAML and assembled by a factory layer; VQE and VQD are the first implemented variational algorithms.
+Atlas is a modular quantum simulation framework that decouples physical model description from algorithm execution and hardware backend details. Experiments are configured via YAML and assembled by a factory layer. This document focuses on **VQE / TFIM validation**; Atlas also ships VQD and Hamiltonian simulation (Lie / Strang) with a separate lattice dashboard for dynamics.
 
 The high-level architecture:
 
@@ -104,7 +104,7 @@ The high-level architecture:
 YAML config → load_config → factory/builders → experiment → outputs
 ```
 
-Within the package:
+Within the package (VQE-relevant subset):
 
 ```
 Atlas
@@ -113,11 +113,12 @@ Atlas
 ├── Circuits / Ansätze (circuits/ansatzes/)
 ├── Algorithms
 │   ├── VQE (algorithms/vqe.py)
-│   └── VQD (algorithms/vqd.py)
+│   ├── VQD (algorithms/vqd.py)
+│   └── HamiltonianSimulation (algorithms/hamiltonian_sim.py)
 ├── Execution (simulator, IBM Runtime)
-├── Experiments (TFIM sweeps and single-point runs)
+├── Experiments (TFIM VQE/VQD; dynamics under hamiltonian_sim_experiment.py)
 ├── Analysis (metrics)
-└── Visualization (VQE and VQD plots)
+└── Visualization (VQE/VQD plots; dynamics scalar plots + lattice dashboard)
 ```
 
 Atlas maintains a clean separation between:
@@ -289,14 +290,14 @@ Each run writes outputs to a unique directory:
 atlas/data/{experiment_name}_{YYYYMMDD_HHMMSS}/
 ```
 
-The benchmark figures below were generated from the legacy monolithic workflow and remain representative of VQE validation results. Current Atlas runs produce equivalent plot types under the per-run output directory when `output.plots: true`.
+The benchmark figures below were generated from the legacy monolithic workflow and remain representative of VQE validation results. Current Atlas runs produce equivalent plot types under the per-run output directory when `output.plots: true`. Note that modern VQE sweeps write `infidelity_vs_hJ.png` (log-scale infidelity); the figure labeled “fidelity” below is from the legacy asset set.
 
 ---
 
 ### 7.1. Ground State Energy vs $h/J$
 
 
-<img src="assets/energy_vs_hJ.png" alt="Ground State Energy vs h/J" width="500"><br>
+<img src="../assets/energy_vs_hJ.png" alt="Ground State Energy vs h/J" width="500"><br>
 
 
 * **Purpose**: Verify that VQE simulation and hardware executions accurately capture the ground-state energy across the transverse field sweep $h/J \in [0.05, 2.0]$.
@@ -305,7 +306,7 @@ The benchmark figures below were generated from the legacy monolithic workflow a
 
 ### 7.2. Magnetization Phase Competition
 
-<img src="assets/magnetization_comparison.png" alt="Magnetization Phase Competition" width="500"><br>
+<img src="../assets/magnetization_comparison.png" alt="Magnetization Phase Competition" width="500"><br>
 
 * **Purpose**: Identify the quantum phase transition of the TFIM system.
 * **Observation**: At small $h/J \ll 1$, the longitudinal correlation $\langle ZZ \rangle$ is close to $1.0$, while the transverse magnetization $\langle X_0+X_1 \rangle$ is near $0$. As $h/J$ increases, the curves cross over near $h/J \approx 1.0$. The hardware results follow this trend but are slightly compressed towards $0$.
@@ -313,7 +314,7 @@ The benchmark figures below were generated from the legacy monolithic workflow a
 
 ### 7.3. Absolute Energy Error Comparison
 
-<img src="assets/sim_vs_hardware_error.png" alt="Absolute Energy Error Comparison" width="500"><br>
+<img src="../assets/sim_vs_hardware_error.png" alt="Absolute Energy Error Comparison" width="500"><br>
 
 * **Purpose**: Contrast the precision of the noiseless simulator with physical quantum hardware.
 * **Observation**: The simulator's absolute energy error fluctuates between $10^{-4}$ and $10^{-9}$, while the hardware error remains between $10^{-2}$ and $10^{-1}$.
@@ -321,7 +322,7 @@ The benchmark figures below were generated from the legacy monolithic workflow a
 
 ### 7.4. State Fidelity vs $h/J$
 
-<img src="assets/fidelity_vs_hJ.png" alt="State Fidelity vs h/J" width="500"><br>
+<img src="../assets/fidelity_vs_hJ.png" alt="State Fidelity vs h/J" width="500"><br>
 
 * **Purpose**: Track the state preparation quality of the VQE simulator.
 * **Observation**: The state fidelity is extremely high ($>0.999$) for almost the entire range, showing a tiny dip near $h/J \approx 0.05$ and $0.15$ where it is $0.956$ and $0.993$ respectively.
@@ -329,7 +330,7 @@ The benchmark figures below were generated from the legacy monolithic workflow a
 
 ### 7.5. Simulator vs Hardware Parity
 
-<img src="assets/sim_vs_hardware_parity.png" alt="Simulator vs Hardware Parity" width="500"><br>
+<img src="../assets/sim_vs_hardware_parity.png" alt="Simulator vs Hardware Parity" width="500"><br>
 
 * **Purpose**: Correlate the simulation energy against physical hardware measurements.
 * **Observation**: The data points form a linear sequence parallel to the $y=x$ line but are shifted consistently upwards.
@@ -337,7 +338,7 @@ The benchmark figures below were generated from the legacy monolithic workflow a
 
 ### 7.6. Relative Energy Error
 
-<img src="assets/relative_error.png" alt="Relative Energy Error" width="500"><br>
+<img src="../assets/relative_error.png" alt="Relative Energy Error" width="500"><br>
 
 * **Purpose**: Benchmark the relative accuracy of the IBM QPU.
 * **Observation**: The relative error starts around 1.3%, peaks near $h/J = 0.36$ at 3.19%, and decreases to under 1% at $h/J \approx 1.28$, with an average of **1.91%**.
@@ -367,21 +368,24 @@ As the system scales to $N$ qubits:
 
 ## Atlas Roadmap
 
-VQE and VQD are implemented in the current Atlas framework. Future development expands into a broader quantum simulation platform:
+VQE, VQD, and Hamiltonian simulation (Lie / Strang product formulas) are
+implemented in the current Atlas framework. Future development expands into a
+broader quantum simulation platform:
 
 - **Qubit count expansion**: Extend TFIM benchmarks to 8 and 16 qubits.
 - **Alternative ansätze**: Unitary Coupled Cluster (UCCSD) and Hamiltonian Variational Ansatz (HVA).
 - **Advanced error mitigation**: Zero-noise extrapolation (ZNE) and probabilistic error cancellation (PEC) via Mitiq.
-- **Quantum dynamics**: Time evolution via Trotter-Suzuki decomposition.
 - **Additional Hamiltonians**: Heisenberg, Hubbard, molecular systems.
+- **Richer dynamics methods**: Higher-order Suzuki formulas, randomized product formulas, QSP / qubitization.
 
 ```
 Current
 ✓ YAML-driven configuration
 ✓ Variational Quantum Eigensolver (VQE)
 ✓ Variational Quantum Deflation (VQD)
+✓ Hamiltonian simulation (Lie / Strang) + lattice dashboard
 ✓ n-qubit TFIM and hardware-efficient ansatz
-✓ IBM Quantum Runtime integration
+✓ IBM Quantum Runtime integration (variational path)
 
 ↓
 
@@ -389,7 +393,7 @@ Expanded ansätze and system sizes
 
 ↓
 
-Quantum dynamics (Trotterization)
+Richer dynamics methods / additional Hamiltonians
 
 ↓
 

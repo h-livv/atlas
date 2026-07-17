@@ -1,6 +1,15 @@
 # Atlas Architecture Design Review: Hamiltonian Simulation Integration
 
-This document is based on the current codebase as of the review date. It distinguishes **observations** (what exists today) from **proposals** (what should be built). No implementation is included.
+> **Status: HISTORICAL / SUPERSEDED**  
+> This document captured a pre-implementation design review. Hamiltonian
+> simulation is now wired end-to-end (`HamiltonianSimExperiment`, product
+> formulas, evolver, sim plots, lattice dashboard, YAML configs).  
+> Treat the sections below as design history, not as a description of the
+> current codebase. For the live architecture, see
+> [`architecture_analysis.md`](architecture_analysis.md) and
+> [`atlas_component_extension_guide.md`](atlas_component_extension_guide.md).
+
+This document is based on the codebase as of the original review date. It distinguishes **observations** (what existed then) from **proposals** (what should be built). No implementation is included in this file.
 
 ---
 

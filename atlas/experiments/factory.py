@@ -319,12 +319,12 @@ class ConfiguredExperimentRunner:
             API (VQE, VQD, or dynamics).
 
         Inputs:
-            None (reads ``J``, ``h``, and algorithm name from config).
+            None (reads system parameters and algorithm name from config).
 
         Process:
-            For dynamics, call ``run_single_point(J, h)`` (evolution time
-            resolved inside the experiment). For variational, resolve
-            sim/hardware mode and call VQE or VQD single-point methods.
+            For dynamics, call ``run_single_point()`` so all parameters come
+            from config. For variational, resolve sim/hardware mode and call
+            VQE or VQD single-point methods with configured ``J``/``h``.
 
         Outputs:
             A point-result dataclass (TFIM or Sim).
@@ -333,13 +333,14 @@ class ConfiguredExperimentRunner:
             Executes algorithms; may submit hardware jobs.
         """
 
+        if is_dynamics_algorithm(self.config.algorithm.name):
+            method_names = resolve_evolution_methods(self.config)
+            if len(method_names) > 1:
+                return self.experiment.run_single_point_comparison(method_names)
+            return self.experiment.run_single_point()
+
         params = self.config.system.parameters
         J = float(params["J"])
-
-        if is_dynamics_algorithm(self.config.algorithm.name):
-            h = float(params["h"])
-            return self.experiment.run_single_point(J=J, h=h)
-
         h = float(params["h"])
         mode, backend = self._execution_mode_and_backend()
 
@@ -357,10 +358,9 @@ class ConfiguredExperimentRunner:
             None (requires ``config.system.sweep`` with ``parameter``/``values``).
 
         Process:
-            For dynamics, pass fixed companions (``h`` / ``evolution_time``)
-            depending on which parameter is swept. For variational, only
-            ``h`` sweeps are supported; resolve hardware inclusion and call
-            VQE or VQD sweep methods.
+            For dynamics, sweep any configured axis using system parameters
+            from config. For variational, only ``h`` sweeps are supported;
+            resolve hardware inclusion and call VQE or VQD sweep methods.
 
         Outputs:
             A benchmark/result collection for the sweep.
@@ -376,22 +376,25 @@ class ConfiguredExperimentRunner:
 
         parameter = sweep.get("parameter", "h")
         sweep_values = sweep["values"]
-        J = float(self.config.system.parameters["J"])
 
         if is_dynamics_algorithm(self.config.algorithm.name):
-            fixed_h = float(self.config.system.parameters["h"])
-            fixed_evolution_time = resolve_evolution_time(self.config)
-            # Only pass fixed companions that are *not* the swept axis.
+            method_names = resolve_evolution_methods(self.config)
+            fixed_evolution_time = (
+                None
+                if parameter == "evolution_time"
+                else resolve_evolution_time(self.config)
+            )
+            if len(method_names) > 1:
+                return self.experiment.run_sweep_comparison(
+                    method_names=method_names,
+                    sweep_values=sweep_values,
+                    sweep_parameter=parameter,
+                    fixed_evolution_time=fixed_evolution_time,
+                )
             return self.experiment.run_sweep(
-                J=J,
                 sweep_values=sweep_values,
                 sweep_parameter=parameter,
-                fixed_h=fixed_h if parameter in ("evolution_time", "num_trotter_steps") else None,
-                fixed_evolution_time=(
-                    fixed_evolution_time
-                    if parameter in ("h", "num_trotter_steps")
-                    else None
-                ),
+                fixed_evolution_time=fixed_evolution_time,
             )
 
         if parameter != "h":
@@ -399,6 +402,7 @@ class ConfiguredExperimentRunner:
                 f"Sweep parameter '{parameter}' is not supported for variational experiments."
             )
 
+        J = float(self.config.system.parameters["J"])
         mode, backend = self._execution_mode_and_backend()
         hardware_source = self.config.hardware.hardware_csv_path
         include_hardware = self.config.hardware.enabled and backend is not None
@@ -421,11 +425,11 @@ class ConfiguredExperimentRunner:
         )
 
     def _run_trotter_validation(self):
-        """Compare Trotter methods/steps at fixed physics parameters.
+        """Compare Trotter methods/steps at fixed configured parameters.
 
         Purpose:
             Run dynamics-only validation that sweeps step counts (and
-            optionally methods) at fixed ``J``, ``h``, and evolution time.
+            optionally methods) at fixed system parameters and evolution time.
 
         Inputs:
             None (reads system parameters and algorithm evolution settings).
@@ -447,16 +451,11 @@ class ConfiguredExperimentRunner:
                 "Experiment type 'trotter_validation' requires a dynamics algorithm."
             )
 
-        params = self.config.system.parameters
-        J = float(params["J"])
-        h = float(params["h"])
         evolution_time = resolve_evolution_time(self.config)
         method_names = resolve_evolution_methods(self.config)
         step_values = resolve_trotter_step_values(self.config)
 
         return self.experiment.run_trotter_validation(
-            J=J,
-            h=h,
             evolution_time=evolution_time,
             method_names=method_names,
             step_values=step_values,

@@ -5,7 +5,7 @@ experiment:
 system:
   name: tfim
   parameters:
-    num_qubits: 2
+    num_qubits: 5
     J: 1.0
     h: 0.5
     evolution_time: 0.5
@@ -19,7 +19,7 @@ algorithm:
 initial_state:
   name: computational
   parameters:
-    bitstring: "00"
+    bitstring: "01010"
 
 backend:
   name: statevector_evolver

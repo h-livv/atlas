@@ -149,23 +149,18 @@ def write_sim_benchmark(result: SimBenchmarkResult, path: str) -> None:
         path: Destination CSV path.
 
     Process:
-        Emit one row per point with fixed metadata columns, then expand
-        observable names into ``sim_*`` / ``exact_*`` / ``error_*`` columns.
-
-    Outputs:
-        None.
-
-    Side effects:
-        Writes a CSV file at ``path``.
+        Emit one row per point with system parameters as dynamic columns,
+        evolution/method metadata, then expand observable names into
+        ``sim_*`` / ``exact_*`` / ``error_*`` columns.
     """
 
     rows = []
     for point in result.points:
         row = {
-            "h": point.h,
-            "J": point.J,
+            **{str(key): value for key, value in point.system_parameters.items()},
             "evolution_time": point.evolution_time,
             "fidelity": point.fidelity,
+            "infidelity": point.infidelity,
             "method_name": point.sim_result.method_name,
             "num_trotter_steps": point.sim_result.num_trotter_steps,
             "circuit_depth": point.sim_result.circuit_depth,
@@ -186,7 +181,7 @@ def write_sim_validation(result: SimValidationResult, path: str) -> None:
 
     Purpose:
         Flatten the method × step grid into one CSV for offline comparison
-        of Lie vs Strang (or other) product formulas.
+        of product formulas.
 
     Inputs:
         result: Container whose ``series`` list holds one ``SimBenchmarkResult``
@@ -194,26 +189,20 @@ def write_sim_validation(result: SimValidationResult, path: str) -> None:
         path: Destination CSV path.
 
     Process:
-        Nested loop over series and points; include ``max_operator_error`` and
-        per-observable error columns.
-
-    Outputs:
-        None.
-
-    Side effects:
-        Writes a CSV file at ``path``.
+        Nested loop over series and points; include system parameters,
+        ``max_operator_error``, and per-observable error columns.
     """
 
     rows = []
     for series in result.series:
         for point in series.points:
             row = {
-                "h": point.h,
-                "J": point.J,
+                **{str(key): value for key, value in point.system_parameters.items()},
                 "evolution_time": point.evolution_time,
                 "method_name": point.method_name,
                 "num_trotter_steps": point.num_trotter_steps,
                 "fidelity": point.fidelity,
+                "infidelity": point.infidelity,
                 "max_operator_error": point.max_operator_error,
                 "circuit_depth": point.circuit_depth,
             }

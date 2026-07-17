@@ -15,6 +15,7 @@ Architectural role:
 
 from __future__ import annotations
 
+import numpy as np
 from qiskit.circuit import QuantumCircuit
 from qiskit.quantum_info import Statevector, state_fidelity
 
@@ -75,6 +76,39 @@ def expectation_values(state, observables: list[ObservableSpec]) -> dict[str, fl
         state = Statevector(state)
 
     return {spec.name: state.expectation_value(spec.operator).real for spec in observables}
+
+
+def site_expectation_arrays(
+    state, grouped_observables: dict[str, list[ObservableSpec]]
+) -> dict[str, np.ndarray]:
+    """Return ``{series_name: array(n_sites,)}`` for grouped local observables.
+
+    Purpose:
+        Package per-site expectations for lattice visualization without
+        mixing them into scalar observable dicts.
+
+    Inputs:
+        state: ``Statevector`` or bound ``QuantumCircuit``.
+        grouped_observables: Mapping of series name → ordered site specs
+            (e.g. ``{\"z\": [z_0, z_1, ...]}``).
+
+    Outputs:
+        Dict of series name → 1-D numpy array of real expectations.
+    """
+
+    if not grouped_observables:
+        return {}
+
+    if isinstance(state, QuantumCircuit):
+        state = Statevector(state)
+
+    arrays = {}
+    for series_name, specs in grouped_observables.items():
+        arrays[series_name] = np.asarray(
+            [state.expectation_value(spec.operator).real for spec in specs],
+            dtype=float,
+        )
+    return arrays
 
 
 def absolute_error(reference: float, value: float) -> float:

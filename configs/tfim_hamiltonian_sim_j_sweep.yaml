@@ -1,6 +1,6 @@
 experiment:
-  type: single_point
-  name: tfim_hamiltonian_sim_single
+  type: sweep
+  name: tfim_hamiltonian_sim_j_sweep
 
 system:
   name: tfim
@@ -9,6 +9,9 @@ system:
     J: 1.0
     h: 0.5
     evolution_time: 0.5
+  sweep:
+    parameter: J
+    values: [0.25, 0.5, 1.0, 1.5, 2.0]
 
 algorithm:
   name: hamiltonian_sim
@@ -39,5 +42,5 @@ analysis:
 
 output:
   directory: atlas/data
-  csv: false
+  csv: true
   plots: true

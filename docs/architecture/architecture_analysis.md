@@ -1,9 +1,9 @@
 # Atlas Architecture Analysis
 
 > **Scope:** Documentation of the *current* Atlas implementation only.  
-> **Date of analysis:** 2026-07-17  
+> **Date of analysis:** 2026-07-17 (updated for lattice dashboard / site observables)  
 > **Codebase root:** `/home/h-livv/Projects/atlas`  
-> **Source inventory:** 45 Python modules under `atlas/` (~3.8k lines)
+> **Source inventory:** 56 Python modules under `atlas/` (~9.8k lines)
 
 This document explains how Atlas is structured, why each piece exists, how data and objects move through a run, and what architectural strengths and limitations follow from the present code—not from intended future design.
 
@@ -116,7 +116,7 @@ flowchart TB
 | `atlas/optimization/` | Classical optimizer wrappers (SciPy). |
 | `atlas/experiments/` | Factory, builders, TFIM/dynamics workflows, results, outputs. |
 | `atlas/analysis/` | Pure numerical metrics (fidelity, errors, expectations). |
-| `atlas/visualization/` | Matplotlib plotting (TFIM, VQD, sim, validation registry). |
+| `atlas/visualization/` | Matplotlib plotting (TFIM, VQD, sim, validation registry, lattice dashboard). |
 | `atlas/io/` | YAML loading/validation and CSV read/write. |
 | `configs/` | Example YAML experiment configs (not imported as code). |
 | `docs/` | Human documentation (this analysis lives under `docs/architecture/`). |
@@ -165,7 +165,7 @@ For each source file: why it exists, responsibility, interactions, dependencies,
 | `atlas/io/__init__.py` | Empty | Same for `io`. |
 | `atlas/optimization/__init__.py` | Empty | Same for `optimization`. |
 | `atlas/physics/__init__.py` | Empty | Same for `physics`. |
-| `atlas/visualization/__init__.py` | Empty | Same for `visualization`. |
+| `atlas/visualization/__init__.py` | Package docstring | Documents lattice dashboard / static plot consumers. |
 
 **Assumption:** Callers import concrete submodules (`from atlas.algorithms.vqe import VQE`), not package-level barrels.
 
@@ -397,13 +397,13 @@ For each source file: why it exists, responsibility, interactions, dependencies,
 - **Interactions:** Produced by algorithms/experiments; consumed by I/O and visualization.
 - **Dependencies:** `numpy` only (intentionally thin).
 - **If removed:** Cascade failure through experiments/I/O/viz.
-- **Assumptions:** Physics never imports this module; observable dict keys stable (`zz`, `x`).
+- **Assumptions:** Physics never imports this module; scalar observable dict keys stable (`zz`, `x`); optional `site_observables` / `exact_site_observables` arrays for lattice viz.
 
 #### `atlas/experiments/outputs.py`
 
 - **Why:** Persist and present finished runs without owning physics/algorithms.
-- **Responsibility:** Timestamped run dirs; `isinstance` dispatch to CSV/plots/console; VQD CSV written inline with pandas (others use `csv_io`).
-- **Interactions:** Called by `main`; fans out to viz + csv_io.
+- **Responsibility:** Timestamped run dirs; `isinstance` dispatch to CSV/plots/console; lattice dashboard PNG snapshots when site arrays exist; VQD CSV written inline with pandas (others use `csv_io`).
+- **Interactions:** Called by `main`; fans out to viz (including `hamiltonian_sim`) + csv_io.
 - **Dependencies:** result types, viz modules, csv_io, numpy/pandas.
 - **If removed:** Runs complete but produce no artifacts.
 - **Assumptions:** Result type matches experiment family; output flags honored.
@@ -415,7 +415,7 @@ For each source file: why it exists, responsibility, interactions, dependencies,
 #### `atlas/analysis/metrics.py`
 
 - **Why:** Pure numerical post-processing—no jobs, no plots.
-- **Responsibility:** `state_fidelity_to_exact`, `expectation_values`, `absolute_error`, `relative_error_percent`.
+- **Responsibility:** `state_fidelity_to_exact`, `expectation_values`, `site_expectation_arrays`, `absolute_error`, `relative_error_percent`.
 - **Interactions:** Called by both experiment classes and `csv_io`.
 - **Dependencies:** Qiskit, `ObservableSpec`.
 - **If removed:** Scoring in experiments fails.
@@ -445,10 +445,27 @@ For each source file: why it exists, responsibility, interactions, dependencies,
 
 #### `atlas/visualization/sim_plots.py`
 
-- **Why:** Passive plots for dynamics point/sweep results.
+- **Why:** Scalar plots for dynamics point/sweep results.
 - **Responsibility:** Observable bars, fidelity/observable vs sweep, `plot_all_sim`.
 - **Interactions:** Called from `outputs` sim save paths.
 - **If removed:** Dynamics plots fail.
+
+#### `atlas/visualization/hamiltonian_sim/` package
+
+| File / package | Role |
+|----------------|------|
+| `lattice.py` | `LatticeGeometry`, `LatticeFrame`, `LatticeTrajectory` (display data only). |
+| `layouts.py` | `chain_1d`, `grid_2d` — display geometry, not physics. |
+| `colors.py` | Diverging colormaps for signed site values. |
+| `renderer.py` | `LatticeGraphRenderer` — geometry-agnostic nodes + independent edges. |
+| `adapters.py` | Map `SimPointResult` / `SimBenchmarkResult` site arrays → trajectories. |
+| `dashboard.py` | `LatticeDashboard` — metadata panel, discrete time slider, play/pause. |
+| `views/` | `LatticeView` ABC, `GraphLatticeView`, `Chain1DView`. |
+
+- **Why:** Physics-agnostic lattice visualization for dynamics. Interactive path is Matplotlib (slider + playback); batch path writes PNG snapshots from `outputs.py`. Not GIF/MP4.
+- **Interactions:** Consumes `site_observables` / `exact_site_observables` on dynamics results; never imports `atlas.physics`. Interactive entry: `scripts/run_lattice_dashboard.py`.
+- **If removed:** Scalar sim plots remain; lattice snapshots / dashboard unavailable.
+- **Assumptions:** Site arrays are precomputed upstream via `analysis.site_observables`.
 
 #### `atlas/visualization/sim_validation/` package
 
@@ -492,7 +509,7 @@ For each source file: why it exists, responsibility, interactions, dependencies,
 | `OptimizerSettingsConfig` | Named optimizer | `name`, `parameters` | Required for variational |
 | `BackendConfig` | Estimator/evolver | `name`, `parameters` | Child |
 | `InitialStateConfig` | Dynamics ψ₀ | `name`, `parameters` | Optional on `AtlasConfig` |
-| `AnalysisConfig` | Post-run analysis | `observables`, `fidelity` | Child |
+| `AnalysisConfig` | Post-run analysis | `observables`, `site_observables`, `fidelity` | Child |
 | `AtlasConfig` | Top-level YAML config | all of the above + hardware/output | Produced by `load_config` |
 
 **Member variable pattern (all config dataclasses):** initialized at construction by `load_config` or defaults; treated as immutable-by-convention (not `frozen=True`); consumed read-only by factory/builders/experiments/outputs.
@@ -641,7 +658,7 @@ For each source file: why it exists, responsibility, interactions, dependencies,
 | `TFIMVQDPointResult` | spectrum + VQD + per-state metrics | Sweep element |
 | `TFIMBenchmarkResult` / `TFIMVQDBenchmarkResult` | list of points | Sweep container |
 | `SimulationResult` | statevector + Trotter metadata | Nested in sim points |
-| `SimPointResult` | exact vs sim + obs errors | Sweep element |
+| `SimPointResult` | exact vs sim + obs errors + optional site arrays | Sweep element |
 | `SimBenchmarkResult` | sweep param + points | Sweep / validation series |
 | `SimValidationResult` | multi-method series | Validation container |
 
@@ -1195,6 +1212,7 @@ flowchart TB
   outputs --> tfim_vqd_plots
   outputs --> sim_plots
   outputs --> sim_validation
+  outputs --> hamiltonian_sim_viz[visualization.hamiltonian_sim]
 
   csv_io --> results
   csv_io --> metrics
@@ -1427,7 +1445,8 @@ Grounded in the weaknesses and structure above. Each item states why it exists, 
 | Initial states | `computational` |
 | Evolution methods | `lie`, `strang` |
 | Observables | `tfim_default` |
-| Sweep parameters | `h`, `evolution_time`, `num_trotter_steps` |
+| Site observables | `local_z`, `local_x`, `local_y` (optional; dynamics lattice viz) |
+| Sweep parameters | `h`, `J`, `evolution_time`, `num_trotter_steps` (and other `system.parameters` keys for dynamics) |
 
 ## Appendix B: Example Config Files
 
@@ -1436,18 +1455,22 @@ Grounded in the weaknesses and structure above. Each item states why it exists, 
 | `configs/tfim_vqe.yaml` | VQE `h` sweep |
 | `configs/tfim_vqe_single.yaml` | VQE single point |
 | `configs/tfim_vqd.yaml` | VQD single point |
+| `configs/tfim_vqd_sweep.yaml` | VQD `h` sweep |
 | `configs/tfim_hamiltonian_sim_single.yaml` | Dynamics single point |
-| `configs/tfim_hamiltonian_sim_time_sweep.yaml` | Dynamics time sweep |
+| `configs/tfim_hamiltonian_sim_time_sweep.yaml` | Dynamics time sweep (+ `site_observables`) |
+| `configs/tfim_hamiltonian_sim_h_sweep.yaml` | Dynamics `h` sweep |
+| `configs/tfim_hamiltonian_sim_j_sweep.yaml` | Dynamics `J` sweep |
 | `configs/tfim_trotter_validation.yaml` | Lie vs Strang step grid |
 
 ## Appendix C: Related Documents
 
 | Document | Note |
 |----------|------|
-| `README.md` | Philosophy and capability overview |
-| `docs/atlas_component_extension_guide.md` | How to extend YAML/factory/builders |
-| `docs/vqe_tfim.md` | Physics/math of VQE on TFIM |
-| `docs/architecture_review_for_ham_sim.md` | Earlier design review; **partially stale** relative to current wired ham-sim |
+| `README.md` | Philosophy, quick start, capability overview |
+| `docs/architecture/atlas_component_extension_guide.md` | How to extend YAML/factory/builders/viz |
+| `docs/data/data_generation_guide.md` | Config catalog, artifacts, lattice dashboard |
+| `docs/validation/vqe_tfim.md` | Physics/math of VQE on TFIM |
+| `docs/architecture/architecture_review_for_ham_sim.md` | Historical ham-sim design review; **superseded** by the wired implementation |
 
 ---
 

@@ -170,16 +170,20 @@ class Hamiltonian:
             None. Uses dense matrix exponentiation (``2 ** n`` scaling).
         """
 
-        matrix = self.operator().to_matrix()
+        from atlas import profiling as profile
+
+        with profile.span("exact.to_matrix"):
+            matrix = self.operator().to_matrix()
         state = np.asarray(initial_state, dtype=complex).reshape(-1)
         # Schrödinger evolution under a time-independent Hermitian H.
-        evolved = expm(-1j * matrix * time) @ state
-        norm = np.linalg.norm(evolved)
-        if norm == 0:
-            raise ValueError("Time evolution produced a zero-norm statevector.")
-        # Numerical expm can drift slightly off the unit sphere; renormalize.
-        evolved = evolved / norm
-        energy = float(np.real(np.vdot(evolved, matrix @ evolved)))
+        with profile.span("exact.expm_apply"):
+            evolved = expm(-1j * matrix * time) @ state
+            norm = np.linalg.norm(evolved)
+            if norm == 0:
+                raise ValueError("Time evolution produced a zero-norm statevector.")
+            # Numerical expm can drift slightly off the unit sphere; renormalize.
+            evolved = evolved / norm
+            energy = float(np.real(np.vdot(evolved, matrix @ evolved)))
         return ExactResult(energy=energy, statevector=evolved)
 
 class TFIMHamiltonian(Hamiltonian):

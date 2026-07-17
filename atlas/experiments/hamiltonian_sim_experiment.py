@@ -1,29 +1,30 @@
 """Hamiltonian simulation experiment orchestration.
 
-Composes Hamiltonians, initial states, and observables for a given parameter
-point, runs the configured dynamics algorithm, and computes fidelity and
+Composes Hamiltonians, initial states, and observables from configuration,
+runs the configured dynamics algorithm, and computes fidelity and
 observable metrics against exact time evolution.
-
-Architectural role:
-    Parallel to ``TFIMExperiment`` but for product-formula dynamics. Called by
-    ``ConfiguredExperimentRunner`` for ``hamiltonian_sim`` (and related)
-    algorithms. Plotting/CSV remain in ``atlas.experiments.outputs``.
 """
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 from qiskit.quantum_info import Statevector
 
 from atlas.algorithms.hamiltonian_sim import HamiltonianSimulation
-from atlas.analysis.metrics import absolute_error, expectation_values, state_fidelity_to_exact
+from atlas.analysis.metrics import (
+    absolute_error,
+    expectation_values,
+    site_expectation_arrays,
+    state_fidelity_to_exact,
+)
 from atlas.config import AtlasConfig
 from atlas.experiments.builders import (
     build_evolution_method_named,
     build_hamiltonian,
     build_initial_state,
     build_observables,
+    build_site_observables,
     resolve_evolution_time,
 )
 from atlas.experiments.results import (
@@ -31,298 +32,305 @@ from atlas.experiments.results import (
     SimPointResult,
     SimValidationResult,
 )
+from atlas import profiling as profile
+
+# Parameters that control the dynamics run but are not Hamiltonian constructor args.
+_NON_HAMILTONIAN_SYSTEM_KEYS = frozenset({"evolution_time"})
 
 
 class HamiltonianSimExperiment:
-    """Dynamics experiment workflow using YAML-configured components.
-
-    Responsibility:
-        For each TFIM parameter point and evolution time, compare exact
-        Schrödinger evolution to a Trotterized circuit simulation, recording
-        fidelity, observables, and per-observable absolute errors.
-
-    State:
-        config: ``AtlasConfig`` for builders and defaults.
-        algorithm: Default ``HamiltonianSimulation`` (method + evolver).
-        num_qubits: From system parameters.
-        compute_fidelity: Whether fidelity is computed (else NaN).
-
-    Usage:
-        Built by the factory for dynamics algorithms. Call
-        ``run_single_point``, ``run_sweep``, or ``run_trotter_validation``.
-        Temporary algorithm instances are created when overriding Trotter
-        steps or validating multiple methods, always reusing the same evolver.
-    """
+    """Dynamics experiment workflow driven entirely by ``AtlasConfig``."""
 
     def __init__(self, config: AtlasConfig, algorithm: HamiltonianSimulation):
-        """Store config, default algorithm, and analysis flags.
-
-        Inputs:
-            config: Full experiment configuration.
-            algorithm: Configured ``HamiltonianSimulation`` instance.
-        """
-
         self.config = config
         self.algorithm = algorithm
         self.num_qubits = int(config.system.parameters["num_qubits"])
         self.compute_fidelity = config.analysis.fidelity
 
-    def _build_point_context(self, J: float, h: float):
-        """Build Hamiltonian, initial state, and observables for one point.
+    def _resolved_system_parameters(
+        self, parameter_overrides: Optional[dict[str, Any]] = None
+    ) -> dict[str, Any]:
+        params = dict(self.config.system.parameters)
+        if parameter_overrides:
+            params.update(parameter_overrides)
+        return params
 
-        Purpose:
-            Share construction across single-point evaluation and validation.
+    def _resolve_num_trotter_steps(self, override: Optional[int] = None) -> int:
+        if override is not None:
+            return int(override)
+        raw = self.config.algorithm.parameters.get("num_trotter_steps", 10)
+        if isinstance(raw, list):
+            return int(raw[0])
+        return int(raw)
 
-        Inputs:
-            J: Coupling override.
-            h: Transverse-field override.
-
-        Process:
-            Build Hamiltonian with overrides; initial state and observables
-            from config and qubit count.
-
-        Outputs:
-            Tuple ``(hamiltonian, initial_state, observables)``.
-
-        Side effects:
-            None.
-        """
-
-        hamiltonian = build_hamiltonian(
-            self.config, parameter_overrides={"J": J, "h": h}
+    def _build_algorithm(
+        self,
+        method_name: str,
+        num_trotter_steps: Optional[int] = None,
+    ) -> HamiltonianSimulation:
+        steps = self._resolve_num_trotter_steps(num_trotter_steps)
+        with profile.span("build.evolution_method", method=method_name, steps=steps):
+            evolution_method = build_evolution_method_named(method_name, steps)
+        return HamiltonianSimulation(
+            evolution_method=evolution_method,
+            evolver=self.algorithm.evolver,
         )
-        initial_state = build_initial_state(self.config, self.num_qubits)
-        observables = build_observables(self.config, self.num_qubits)
-        return hamiltonian, initial_state, observables
+
+    def _resolve_evolution_time(
+        self,
+        system_parameters: dict[str, Any],
+        evolution_time: Optional[float] = None,
+    ) -> float:
+        if evolution_time is not None:
+            return float(evolution_time)
+        if "evolution_time" in system_parameters:
+            return float(system_parameters["evolution_time"])
+        return resolve_evolution_time(self.config)
+
+    def _build_point_context(self, system_parameters: dict[str, Any]):
+        hamiltonian_overrides = {
+            key: value
+            for key, value in system_parameters.items()
+            if key not in _NON_HAMILTONIAN_SYSTEM_KEYS
+        }
+        with profile.span("build.hamiltonian"):
+            hamiltonian = build_hamiltonian(
+                self.config, parameter_overrides=hamiltonian_overrides
+            )
+        with profile.span("build.initial_state"):
+            initial_state = build_initial_state(self.config, self.num_qubits)
+        with profile.span("build.observables"):
+            observables = build_observables(self.config, self.num_qubits)
+        with profile.span("build.site_observables"):
+            site_observables = build_site_observables(self.config, self.num_qubits)
+        return hamiltonian, initial_state, observables, site_observables
 
     def _evaluate_point(
         self,
-        J: float,
-        h: float,
+        system_parameters: dict[str, Any],
         evolution_time: float,
         algorithm: HamiltonianSimulation,
     ) -> SimPointResult:
-        """Compare exact and simulated evolution for one point and algorithm.
+        meta = {"evolution_time": float(evolution_time)}
+        with profile.span("point.context_build", **meta):
+            hamiltonian, initial_state, observables, site_obs_groups = (
+                self._build_point_context(system_parameters)
+            )
+        with profile.span("point.initial_statevector", **meta):
+            exact_initial = initial_state.statevector()
+        with profile.span("point.exact_evolution", **meta):
+            exact_result = hamiltonian.exact_time_evolution(exact_initial, evolution_time)
+        with profile.span("point.simulated_evolution", **meta):
+            sim_result = algorithm.run(hamiltonian, initial_state, evolution_time)
 
-        Purpose:
-            Core evaluation used by single-point, sweep, and validation paths
-            so metrics stay consistent.
+        with profile.span("point.state_wrap", **meta):
+            sim_state = Statevector(sim_result.statevector)
+            exact_state = Statevector(exact_result.statevector)
+        with profile.span("point.fidelity", **meta):
+            fidelity = (
+                state_fidelity_to_exact(sim_state, exact_state)
+                if self.compute_fidelity
+                else float("nan")
+            )
+        with profile.span("obs.scalar_expectations", **meta):
+            sim_observables = expectation_values(sim_state, observables)
+            exact_observables = expectation_values(exact_state, observables)
+            observable_errors = {
+                name: absolute_error(exact_observables[name], sim_observables[name])
+                for name in sim_observables
+            }
+        with profile.span("obs.site_expectations", **meta):
+            sim_site = site_expectation_arrays(sim_state, site_obs_groups)
+            exact_site = site_expectation_arrays(exact_state, site_obs_groups)
 
-        Inputs:
-            J: Coupling.
-            h: Transverse field.
-            evolution_time: Total evolution time ``t``.
-            algorithm: ``HamiltonianSimulation`` to run (may differ from
-                ``self.algorithm`` when steps/methods are overridden).
+        with profile.span("point.result_pack", **meta):
+            return SimPointResult(
+                system_parameters=dict(system_parameters),
+                num_qubits=self.num_qubits,
+                evolution_time=evolution_time,
+                exact_state=exact_result.statevector,
+                sim_result=sim_result,
+                fidelity=fidelity,
+                observables=sim_observables,
+                exact_observables=exact_observables,
+                observable_errors=observable_errors,
+                site_observables=sim_site,
+                exact_site_observables=exact_site,
+            )
 
-        Process:
-            Exact evolve initial statevector under the Hamiltonian; run the
-            Trotter algorithm; compute fidelity (optional), sim/exact
-            observables, and absolute errors per observable.
+    def _sweep_point_kwargs(
+        self,
+        value: float,
+        sweep_parameter: str,
+        system_parameters: dict[str, Any],
+        fixed_parameters: Optional[dict[str, Any]],
+        fixed_evolution_time: Optional[float],
+    ) -> tuple[dict[str, Any], float, Optional[int]]:
+        """Return per-point system parameters, evolution time, and optional steps."""
 
-        Outputs:
-            ``SimPointResult``.
+        point_parameters = dict(system_parameters)
+        if fixed_parameters:
+            point_parameters.update(fixed_parameters)
 
-        Side effects:
-            Dense linear algebra for exact evolution; circuit evolution via
-            the evolver. No filesystem I/O.
-        """
+        if sweep_parameter == "evolution_time":
+            return point_parameters, float(value), None
+        if sweep_parameter == "num_trotter_steps":
+            evolution_time = (
+                fixed_evolution_time
+                if fixed_evolution_time is not None
+                else self._resolve_evolution_time(point_parameters)
+            )
+            return point_parameters, evolution_time, int(value)
 
-        hamiltonian, initial_state, observables = self._build_point_context(J, h)
-        exact_initial = initial_state.statevector()
-        exact_result = hamiltonian.exact_time_evolution(exact_initial, evolution_time)
-        sim_result = algorithm.run(hamiltonian, initial_state, evolution_time)
-
-        sim_state = Statevector(sim_result.statevector)
-        exact_state = Statevector(exact_result.statevector)
-        fidelity = (
-            state_fidelity_to_exact(sim_state, exact_state)
-            if self.compute_fidelity
-            else float("nan")
+        point_parameters[sweep_parameter] = value
+        evolution_time = (
+            fixed_evolution_time
+            if fixed_evolution_time is not None
+            else self._resolve_evolution_time(point_parameters)
         )
-        sim_observables = expectation_values(sim_state, observables)
-        exact_observables = expectation_values(exact_state, observables)
-        observable_errors = {
-            name: absolute_error(exact_observables[name], sim_observables[name])
-            for name in sim_observables
-        }
-
-        return SimPointResult(
-            h=h,
-            J=J,
-            num_qubits=self.num_qubits,
-            evolution_time=evolution_time,
-            exact_state=exact_result.statevector,
-            sim_result=sim_result,
-            fidelity=fidelity,
-            observables=sim_observables,
-            exact_observables=exact_observables,
-            observable_errors=observable_errors,
-        )
+        return point_parameters, evolution_time, None
 
     def run_single_point(
         self,
-        J: float,
-        h: float,
+        parameter_overrides: Optional[dict[str, Any]] = None,
         evolution_time: Optional[float] = None,
         num_trotter_steps: Optional[int] = None,
+        method_name: Optional[str] = None,
     ) -> SimPointResult:
-        """Run exact and simulated time evolution for one parameter point.
+        system_parameters = self._resolved_system_parameters(parameter_overrides)
+        evolution_time = self._resolve_evolution_time(system_parameters, evolution_time)
 
-        Purpose:
-            Entry point for single-shot dynamics experiments and one step of
-            a sweep.
-
-        Inputs:
-            J: Coupling.
-            h: Transverse field.
-            evolution_time: Optional; defaults via ``resolve_evolution_time``.
-            num_trotter_steps: Optional override; when set, rebuilds the
-                evolution method with the same method name as
-                ``self.algorithm`` but a new step count.
-
-        Process:
-            Resolve time; optionally clone ``HamiltonianSimulation`` with a
-            new method; call ``_evaluate_point``.
-
-        Outputs:
-            ``SimPointResult``.
-
-        Side effects:
-            Same as ``_evaluate_point``.
-        """
-
-        if evolution_time is None:
-            evolution_time = resolve_evolution_time(self.config)
-
-        algorithm = self.algorithm
-        if num_trotter_steps is not None:
-            # Keep method family (lie/strang) but change discretization for sweeps.
-            method_name = self.algorithm.evolution_method.name
-            evolution_method = build_evolution_method_named(
-                method_name, num_trotter_steps
+        if method_name is not None:
+            algorithm = self._build_algorithm(method_name, num_trotter_steps)
+        elif num_trotter_steps is not None:
+            algorithm = self._build_algorithm(
+                self.algorithm.evolution_method.name, num_trotter_steps
             )
-            algorithm = HamiltonianSimulation(
-                evolution_method=evolution_method,
-                evolver=self.algorithm.evolver,
+        else:
+            algorithm = self.algorithm
+
+        return self._evaluate_point(system_parameters, evolution_time, algorithm)
+
+    def run_single_point_comparison(
+        self,
+        method_names: Sequence[str],
+        parameter_overrides: Optional[dict[str, Any]] = None,
+        evolution_time: Optional[float] = None,
+        num_trotter_steps: Optional[int] = None,
+    ) -> SimValidationResult:
+        """Evaluate one parameter point for each evolution method."""
+
+        system_parameters = self._resolved_system_parameters(parameter_overrides)
+        evolution_time = self._resolve_evolution_time(system_parameters, evolution_time)
+        series = []
+        for method_name in method_names:
+            point = self.run_single_point(
+                parameter_overrides=parameter_overrides,
+                evolution_time=evolution_time,
+                num_trotter_steps=num_trotter_steps,
+                method_name=method_name,
+            )
+            series.append(
+                SimBenchmarkResult(sweep_parameter="single_point", points=[point])
             )
 
-        return self._evaluate_point(J, h, evolution_time, algorithm)
+        return SimValidationResult(
+            system_parameters=dict(system_parameters),
+            evolution_time=evolution_time,
+            series=series,
+        )
 
     def run_sweep(
         self,
-        J: float,
         sweep_values: Sequence[float],
         sweep_parameter: str = "evolution_time",
-        fixed_h: Optional[float] = None,
+        fixed_parameters: Optional[dict[str, Any]] = None,
         fixed_evolution_time: Optional[float] = None,
+        method_name: Optional[str] = None,
     ) -> SimBenchmarkResult:
-        """Run dynamics for each value in ``sweep_values``.
-
-        Purpose:
-            Build a curve of fidelity/depth vs ``evolution_time``, ``h``, or
-            ``num_trotter_steps``.
-
-        Inputs:
-            J: Fixed coupling.
-            sweep_values: Grid along the chosen axis.
-            sweep_parameter: ``"evolution_time"``, ``"h"``, or
-                ``"num_trotter_steps"``.
-            fixed_h: Companion ``h`` when not sweeping ``h``.
-            fixed_evolution_time: Companion time when not sweeping time.
-
-        Process:
-            For each value, resolve companions from arguments or config and
-            call ``run_single_point`` with the appropriate kwargs.
-
-        Outputs:
-            ``SimBenchmarkResult`` tagged with ``sweep_parameter``.
-
-        Side effects:
-            Many evaluations. Raises ``ValueError`` for unsupported sweep
-            parameters.
-        """
-
+        system_parameters = self._resolved_system_parameters(fixed_parameters)
+        method = method_name or self.algorithm.evolution_method.name
         points = []
-        for value in sweep_values:
-            if sweep_parameter == "evolution_time":
-                h = fixed_h if fixed_h is not None else float(self.config.system.parameters["h"])
-                point = self.run_single_point(J=J, h=h, evolution_time=float(value))
-            elif sweep_parameter == "h":
-                evolution_time = (
-                    fixed_evolution_time
-                    if fixed_evolution_time is not None
-                    else resolve_evolution_time(self.config)
+        with profile.span("sweep.total", sweep_parameter=sweep_parameter, method=method):
+            for value in sweep_values:
+                point_parameters, ev_time, steps = self._sweep_point_kwargs(
+                    value,
+                    sweep_parameter,
+                    system_parameters,
+                    fixed_parameters,
+                    fixed_evolution_time,
                 )
-                point = self.run_single_point(J=J, h=float(value), evolution_time=evolution_time)
-            elif sweep_parameter == "num_trotter_steps":
-                h = fixed_h if fixed_h is not None else float(self.config.system.parameters["h"])
-                evolution_time = (
-                    fixed_evolution_time
-                    if fixed_evolution_time is not None
-                    else resolve_evolution_time(self.config)
-                )
-                point = self.run_single_point(
-                    J=J,
-                    h=h,
-                    evolution_time=evolution_time,
-                    num_trotter_steps=int(value),
-                )
-            else:
-                raise ValueError(f"Unsupported sweep parameter '{sweep_parameter}'.")
-            points.append(point)
+                with profile.span(
+                    "sweep.iteration",
+                    evolution_time=float(ev_time),
+                    sweep_value=float(value),
+                    method=method,
+                ):
+                    with profile.span(
+                        "sweep.rebuild_algorithm",
+                        evolution_time=float(ev_time),
+                    ):
+                        algorithm = self._build_algorithm(method, steps)
+                    points.append(
+                        self._evaluate_point(point_parameters, ev_time, algorithm)
+                    )
 
         return SimBenchmarkResult(sweep_parameter=sweep_parameter, points=points)
 
+    def run_sweep_comparison(
+        self,
+        method_names: Sequence[str],
+        sweep_values: Sequence[float],
+        sweep_parameter: str = "evolution_time",
+        fixed_parameters: Optional[dict[str, Any]] = None,
+        fixed_evolution_time: Optional[float] = None,
+    ) -> SimValidationResult:
+        """Sweep a parameter independently for each evolution method."""
+
+        system_parameters = self._resolved_system_parameters(fixed_parameters)
+        series = [
+            self.run_sweep(
+                sweep_values=sweep_values,
+                sweep_parameter=sweep_parameter,
+                fixed_parameters=fixed_parameters,
+                fixed_evolution_time=fixed_evolution_time,
+                method_name=method_name,
+            )
+            for method_name in method_names
+        ]
+        evolution_time = (
+            fixed_evolution_time
+            if fixed_evolution_time is not None
+            else self._resolve_evolution_time(system_parameters)
+        )
+        return SimValidationResult(
+            system_parameters=dict(system_parameters),
+            evolution_time=evolution_time,
+            series=series,
+        )
+
     def run_trotter_validation(
         self,
-        J: float,
-        h: float,
         evolution_time: float,
         method_names: Sequence[str],
         step_values: Sequence[int],
+        parameter_overrides: Optional[dict[str, Any]] = None,
     ) -> SimValidationResult:
-        """Sweep Trotter steps for one or more evolution methods.
-
-        Purpose:
-            Compare product formulas (e.g. Lie vs Strang) as step count
-            increases, at fixed physics and total time.
-
-        Inputs:
-            J, h: Fixed TFIM parameters.
-            evolution_time: Fixed total evolution time.
-            method_names: Evolution method names (``lie``, ``strang``, …).
-            step_values: Trotter step grid.
-
-        Process:
-            For each method, build a fresh ``HamiltonianSimulation`` per step
-            count (reusing ``self.algorithm.evolver``), evaluate, and collect
-            one ``SimBenchmarkResult`` series per method.
-
-        Outputs:
-            ``SimValidationResult`` with one series per method.
-
-        Side effects:
-            Many simulation evaluations; no filesystem I/O.
-        """
-
+        system_parameters = self._resolved_system_parameters(parameter_overrides)
         series = []
         for method_name in method_names:
             points = []
             for steps in step_values:
-                evolution_method = build_evolution_method_named(method_name, int(steps))
-                algorithm = HamiltonianSimulation(
-                    evolution_method=evolution_method,
-                    evolver=self.algorithm.evolver,
+                algorithm = self._build_algorithm(method_name, int(steps))
+                points.append(
+                    self._evaluate_point(system_parameters, evolution_time, algorithm)
                 )
-                points.append(self._evaluate_point(J, h, evolution_time, algorithm))
             series.append(
                 SimBenchmarkResult(sweep_parameter="num_trotter_steps", points=points)
             )
 
         return SimValidationResult(
-            h=h,
-            J=J,
+            system_parameters=dict(system_parameters),
             evolution_time=evolution_time,
             series=series,
         )

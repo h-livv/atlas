@@ -4,5 +4,6 @@ scipy
 pandas
 matplotlib
 numpy
+pillow
 pylatexenc
 pyyaml

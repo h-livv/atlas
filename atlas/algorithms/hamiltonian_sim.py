@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from atlas.execution.evolver import StatevectorEvolver
 from atlas.experiments.results import SimulationResult
+from atlas import profiling as profile
 
 
 class HamiltonianSimulation:
@@ -72,12 +73,14 @@ class HamiltonianSimulation:
             Statevector simulation of the evolution circuit. No filesystem I/O.
         """
 
-        spec = self.evolution_method.build_circuit(
-            hamiltonian,
-            initial_state,
-            evolution_time,
-        )
-        evolution = self.evolver.evolve(spec.circuit)
+        with profile.span("sim.circuit_build"):
+            spec = self.evolution_method.build_circuit(
+                hamiltonian,
+                initial_state,
+                evolution_time,
+            )
+        with profile.span("sim.evolver_evolve"):
+            evolution = self.evolver.evolve(spec.circuit)
         return SimulationResult(
             statevector=evolution.statevector,
             num_qubits=hamiltonian.num_qubits,

@@ -28,7 +28,7 @@ from atlas.execution.estimator import SimulatorEstimator
 from atlas.execution.evolver import StatevectorEvolver
 from atlas.optimization.scipy_optimizer import ScipyOptimizer
 from atlas.physics.hamiltonians import TFIMHamiltonian
-from atlas.physics.observables import tfim_observables
+from atlas.physics.observables import local_pauli_observables, tfim_observables
 
 
 # Only these keys are forwarded into TFIMHamiltonian; other system parameters
@@ -540,6 +540,47 @@ def build_observables(config: AtlasConfig, num_qubits: int):
     raise ValueError(
         f"Unknown observables '{config.analysis.observables}'. "
         "Supported: tfim_default."
+    )
+
+
+def build_site_observables(config: AtlasConfig, num_qubits: int):
+    """Return grouped per-site observable specs for lattice visualization.
+
+    Purpose:
+        Produce named collections of local Pauli operators whose expectations
+        become arrays on ``SimPointResult.site_observables``.
+
+    Inputs:
+        config: Uses ``config.analysis.site_observables`` (optional preset).
+        num_qubits: System width.
+
+    Process:
+        Dispatch on the site-observables preset. ``local_z`` / ``local_x`` /
+        ``local_y`` build one Pauli per site under series name ``z`` / ``x`` /
+        ``y``.
+
+    Outputs:
+        Dict mapping series name → list of ``ObservableSpec`` ordered by site,
+        or an empty dict when site observables are disabled.
+
+    Side effects:
+        None. Raises ``ValueError`` for unknown presets.
+    """
+
+    preset = getattr(config.analysis, "site_observables", None)
+    if not preset:
+        return {}
+
+    if preset == "local_z":
+        return {"z": local_pauli_observables(num_qubits, "Z", prefix="z")}
+    if preset == "local_x":
+        return {"x": local_pauli_observables(num_qubits, "X", prefix="x")}
+    if preset == "local_y":
+        return {"y": local_pauli_observables(num_qubits, "Y", prefix="y")}
+
+    raise ValueError(
+        f"Unknown site_observables '{preset}'. "
+        "Supported: local_z, local_x, local_y."
     )
 
 

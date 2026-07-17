@@ -12,14 +12,14 @@ atlas/
   config.py                    # AtlasConfig and legacy dataclasses
   io/
     yaml_config.py             # load_config(path) -> AtlasConfig
-    csv_io.py                  # TFIM benchmark CSV I/O
+    csv_io.py                  # TFIM / sim benchmark CSV I/O
   experiments/
     builders.py                # build_hamiltonian, build_ansatz, build_algorithm, …
     factory.py                 # build_experiment, run_experiment, hardware backend resolution
     tfim.py                    # TFIMExperiment (VQE/VQD workflows)
     hamiltonian_sim_experiment.py  # HamiltonianSimExperiment (dynamics workflows)
     outputs.py                 # save_outputs, unique run directories, plot/CSV dispatch
-    results.py                 # VQEResult, VQDResult, TFIMPointResult, …
+    results.py                 # VQEResult, SimPointResult, SimBenchmarkResult, …
   physics/                     # Hamiltonians and observables
   circuits/
     ansatzes/                  # Parameterized circuit families
@@ -39,9 +39,19 @@ atlas/
   visualization/
     tfim_plots.py              # VQE benchmark plots
     tfim_vqd_plots.py          # VQD plots
-    sim_plots.py               # Hamiltonian simulation plots
-    circuit_drawer.py
+    sim_plots.py               # Hamiltonian simulation scalar plots
+    sim_validation/            # Trotter validation plot registry
+    hamiltonian_sim/           # Physics-agnostic lattice dashboard
+      lattice.py              # LatticeGeometry / Frame / Trajectory
+      layouts.py               # chain_1d, grid_2d (display geometry only)
+      colors.py                # Diverging colormaps
+      renderer.py              # LatticeGraphRenderer (geometry-agnostic)
+      adapters.py              # SimBenchmarkResult → LatticeTrajectory
+      dashboard.py             # LatticeDashboard (slider + play/pause)
+      views/                   # Chain1DView, GraphLatticeView, …
   configs/                     # Example YAML experiment files (repository root)
+scripts/
+  run_lattice_dashboard.py     # Interactive lattice dashboard entry point
 ```
 
 Run an experiment from the repository root:
@@ -50,7 +60,14 @@ Run an experiment from the repository root:
 python -m atlas.main --config configs/tfim_vqe_single.yaml
 ```
 
-Each run writes to a unique folder under the configured output base:
+Open an interactive lattice dashboard (dynamics + site observables):
+
+```bash
+python scripts/run_lattice_dashboard.py
+python scripts/run_lattice_dashboard.py --config configs/tfim_hamiltonian_sim_time_sweep.yaml --method strang
+```
+
+Each batch run writes to a unique folder under the configured output base:
 
 ```text
 atlas/data/{experiment_name}_{YYYYMMDD_HHMMSS}/
@@ -62,10 +79,10 @@ atlas/data/{experiment_name}_{YYYYMMDD_HHMMSS}/
 YAML file
   → atlas.io.yaml_config.load_config()
   → atlas.experiments.factory.run_experiment()
-      → atlas.experiments.builders (hamiltonian, ansatz, optimizer, estimator, algorithm)
-      → atlas.experiments.tfim.TFIMExperiment
+      → atlas.experiments.builders (…)
+      → TFIMExperiment  or  HamiltonianSimExperiment
   → atlas.experiments.outputs.save_outputs()
-      → CSV, plots, console summary
+      → CSV, static plots, lattice dashboard PNG snapshots, console summary
 ```
 
 `main.py` must remain a thin orchestrator. Do not add Hamiltonian, algorithm, or plotting logic there.
@@ -76,7 +93,7 @@ Experiments are described by YAML files with these sections:
 
 | Section | Purpose |
 |---------|---------|
-| `experiment` | `type` (`single_point` or `sweep`), `name` |
+| `experiment` | `type` (`single_point`, `sweep`, or `trotter_validation`), `name` |
 | `system` | Hamiltonian name, parameters, optional sweep |
 | `algorithm` | `vqe`, `vqd`, or `hamiltonian_sim`, plus algorithm parameters |
 | `ansatz` | Circuit family and parameters (**required for variational algorithms**) |
@@ -84,8 +101,10 @@ Experiments are described by YAML files with these sections:
 | `initial_state` | Initial state for `hamiltonian_sim` (optional; defaults to `\|0...0>`) |
 | `backend` | `statevector` (VQE/VQD) or `statevector_evolver` (dynamics) |
 | `hardware` | IBM Runtime settings (optional) |
-| `analysis` | Observables set and fidelity toggle |
+| `analysis` | Observables preset, optional `site_observables`, fidelity toggle |
 | `output` | Base directory, CSV/plot toggles |
+
+`analysis.site_observables` may be `local_z`, `local_x`, or `local_y`. When set, dynamics experiments store per-site arrays on `SimPointResult.site_observables` / `exact_site_observables` (keys `z`, `x`, or `y`) for the lattice dashboard. Scalar observables (`tfim_default`: `zz`, `x`) remain unchanged.
 
 Example (VQE single point):
 
@@ -270,13 +289,42 @@ Place passive plotting functions under `atlas/visualization/`.
 
 - VQE benchmark plots: `atlas/visualization/tfim_plots.py`
 - VQD plots: `atlas/visualization/tfim_vqd_plots.py`
+- Dynamics scalar plots: `atlas/visualization/sim_plots.py`
+- Trotter validation registry: `atlas/visualization/sim_validation/`
+- Lattice dashboard (physics-agnostic): `atlas/visualization/hamiltonian_sim/`
 
-Wire new plots through `atlas/experiments/outputs.py` when they belong in the default output set for a result type.
+### Lattice dashboard
+
+The lattice package is a **renderer only**. It consumes `LatticeTrajectory`
+(geometry + per-site values over time) and never computes observables or
+inspects Hamiltonians / evolution methods.
+
+| Piece | Role |
+|-------|------|
+| `LatticeGraphRenderer` | Geometry-agnostic nodes + independent edges |
+| `GraphLatticeView` | Dashboard panel for arbitrary graph layouts |
+| `Chain1DView` | Chain-tuned defaults; layout still comes from upstream geometry |
+| `LatticeDashboard` | Metadata panel, time slider, play/pause, window title |
+| Adapters | `SimBenchmarkResult` / `SimPointResult` → `LatticeTrajectory` |
+
+Site arrays are produced upstream via `analysis.site_observables`
+(`local_z` / `local_x` / `local_y`) and stored on
+`SimPointResult.site_observables` / `exact_site_observables`.
+
+When `output.plots: true` and site arrays are present, `outputs.py` writes
+PNG snapshots named `lattice_dashboard_{obs}_{sim|exact}_{method}.png`.
+Interactive use is via `scripts/run_lattice_dashboard.py` (Matplotlib GUI
+backend; not GIF/MP4).
+
+Wire new plots through `atlas/experiments/outputs.py` when they belong in the
+default output set for a result type.
 
 Review checklist:
 
-- No side effects other than writing plot files?
+- No side effects other than writing plot files / showing a GUI window?
 - No reconstruction of Hamiltonians or re-running of algorithms?
+- Lattice renderers remain free of `atlas.physics` imports?
+- New lattice geometries added as layouts/views, not by hard-coding physics?
 
 ## Adding CSV Or Persistence Support
 

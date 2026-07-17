@@ -19,6 +19,7 @@ import matplotlib
 # Agg is a non-interactive backend: required so plot scripts work without a GUI.
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 
 from atlas.visualization.sim_validation.registry import (
     DEFAULT_VALIDATION_PLOTS,
@@ -31,6 +32,13 @@ from atlas.visualization.sim_validation.series import (
     series_label,
     series_metric_values,
 )
+
+# Theoretical log-log slopes for common product formulas (error ~ r^slope).
+# Used only as visual reference overlays; plotting remains data-driven.
+_METHOD_ERROR_SLOPES: dict[str, float] = {
+    "lie": -1.0,
+    "strang": -2.0,
+}
 
 
 def render_method_comparison(
@@ -62,10 +70,6 @@ def render_method_comparison(
 
     Outputs:
         None. Writes ``spec.filename`` under ``output_dir``.
-
-    Side Effects:
-        Creates ``output_dir`` if missing; creates/overwrites the PNG; allocates
-        and closes a matplotlib figure.
     """
 
     os.makedirs(output_dir, exist_ok=True)
@@ -100,39 +104,115 @@ def render_method_comparison(
     plt.close(fig)
 
 
+def _reference_power_law(
+    x_values: np.ndarray,
+    y_values: np.ndarray,
+    slope: float,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Build a power-law guide line ``y ∝ x^slope`` anchored to a data point.
+
+    Purpose:
+        Provide a visual reference for expected Trotter scaling without
+        altering the measured series.
+
+    Process:
+        Prefer the last finite positive (x, y) pair (asymptotic regime);
+        fall back to the first. Return ``None`` when no usable anchor exists.
+    """
+
+    mask = np.isfinite(x_values) & np.isfinite(y_values) & (x_values > 0) & (y_values > 0)
+    if not np.any(mask):
+        return None
+    valid_x = x_values[mask]
+    valid_y = y_values[mask]
+    x0 = float(valid_x[-1])
+    y0 = float(valid_y[-1])
+    x_ref = np.array([float(valid_x[0]), float(valid_x[-1])], dtype=float)
+    y_ref = y0 * (x_ref / x0) ** slope
+    return x_ref, y_ref
+
+
+def render_operator_error_with_reference_slopes(
+    series_list: Sequence,
+    output_dir: str,
+    spec: ValidationPlotSpec,
+) -> None:
+    """Plot operator error vs Trotter steps with theoretical slope guides.
+
+    Purpose:
+        Same method comparison as ``render_method_comparison``, plus dashed
+        reference lines for known product-formula orders (Lie ≈ −1,
+        Strang ≈ −2) when those methods are present in ``series_list``.
+    """
+
+    os.makedirs(output_dir, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    plotted_methods: list[str] = []
+    for benchmark in series_list:
+        if not benchmark.points:
+            continue
+        x_values = series_metric_values(benchmark, spec.x_metric)
+        y_values = series_metric_values(benchmark, spec.y_metric)
+        label = series_label(benchmark)
+        ax.plot(x_values, y_values, marker="o", label=label)
+        plotted_methods.append(label.lower())
+
+        slope = _METHOD_ERROR_SLOPES.get(label.lower())
+        if slope is None:
+            continue
+        reference = _reference_power_law(x_values, y_values, slope)
+        if reference is None:
+            continue
+        x_ref, y_ref = reference
+        ax.plot(
+            x_ref,
+            y_ref,
+            linestyle="--",
+            alpha=0.7,
+            label=f"{label}  slope ≈ {slope:g}",
+        )
+
+    # If a known method was not run, still document the expected slope in the legend.
+    for method_name, slope in _METHOD_ERROR_SLOPES.items():
+        if method_name in plotted_methods:
+            continue
+        ax.plot([], [], linestyle="--", alpha=0.5, label=f"{method_name}  slope ≈ {slope:g}")
+
+    ax.set_xlabel(spec.x_label)
+    ax.set_ylabel(spec.y_label)
+    ax.set_title(spec.title)
+    if spec.log_x:
+        ax.set_xscale("log")
+    if spec.log_y:
+        ax.set_yscale("log")
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(os.path.join(output_dir, spec.filename))
+    plt.close(fig)
+
+
 def _register_default_validation_plots() -> None:
-    """Register the built-in fidelity / operator-error / depth plots.
+    """Register the built-in infidelity / operator-error / depth plots.
 
     Purpose:
         Populate the validation registry at import time so
         ``DEFAULT_VALIDATION_PLOTS`` names resolve without an explicit setup
         call from callers.
-
-    Inputs:
-        None.
-
-    Process:
-        Call ``register_validation_plot`` three times with the standard specs
-        and ``render_method_comparison`` as the shared renderer.
-
-    Outputs:
-        None.
-
-    Side Effects:
-        Mutates ``VALIDATION_PLOT_REGISTRY`` and ``VALIDATION_PLOT_RENDERERS``
-        via ``register_validation_plot``.
     """
 
     register_validation_plot(
         ValidationPlotSpec(
-            name="fidelity_vs_trotter_steps",
-            filename="validation_fidelity_vs_trotter_steps.png",
+            name="infidelity_vs_trotter_steps",
+            filename="validation_infidelity_vs_trotter_steps.png",
             x_metric="num_trotter_steps",
-            y_metric="fidelity",
+            y_metric="infidelity",
             x_label="Trotter steps",
-            y_label="State fidelity",
-            title="Fidelity vs Trotter steps",
+            y_label="State infidelity",
+            title="Infidelity vs Trotter steps",
             log_x=True,
+            log_y=True,
         ),
         render_method_comparison,
     )
@@ -148,17 +228,18 @@ def _register_default_validation_plots() -> None:
             log_x=True,
             log_y=True,
         ),
-        render_method_comparison,
+        render_operator_error_with_reference_slopes,
     )
     register_validation_plot(
         ValidationPlotSpec(
-            name="circuit_depth_vs_accuracy",
-            filename="validation_circuit_depth_vs_accuracy.png",
+            name="circuit_depth_vs_infidelity",
+            filename="validation_circuit_depth_vs_infidelity.png",
             x_metric="circuit_depth",
-            y_metric="fidelity",
+            y_metric="infidelity",
             x_label="Circuit depth",
-            y_label="State fidelity (accuracy)",
-            title="Circuit depth vs accuracy",
+            y_label="State infidelity",
+            title="Circuit depth vs infidelity",
+            log_y=True,
         ),
         render_method_comparison,
     )
@@ -195,10 +276,6 @@ def plot_validation_comparison(
 
     Outputs:
         None. One PNG per selected plot (via the renderers).
-
-    Side Effects:
-        Delegates filesystem and matplotlib side effects to the chosen
-        renderers. Raises ``KeyError`` if a requested name is not registered.
     """
 
     selected = plot_names or DEFAULT_VALIDATION_PLOTS

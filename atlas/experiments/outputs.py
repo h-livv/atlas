@@ -30,8 +30,18 @@ from atlas.experiments.results import (
     TFIMVQDPointResult,
 )
 from atlas.io.csv_io import write_sim_benchmark, write_sim_validation, write_tfim_benchmark
-from atlas.visualization.sim_plots import plot_all_sim, plot_sim_single_point
-from atlas.visualization.sim_validation import plot_validation_comparison, plot_validation_result
+from atlas.visualization.sim_plots import (
+    plot_all_sim,
+    plot_all_sim_comparison,
+    plot_sim_single_point,
+)
+from atlas.visualization.sim_validation import plot_validation_comparison
+from atlas.visualization.hamiltonian_sim import (
+    LatticeDashboard,
+    available_site_observables,
+    trajectory_from_sim_benchmark,
+    trajectory_from_sim_point,
+)
 from atlas.visualization.tfim_plots import plot_all_tfim, plot_vqe_single_point
 from atlas.visualization.tfim_vqd_plots import plot_all_tfim_vqd, plot_vqd_single_point
 
@@ -486,6 +496,91 @@ def _write_vqd_benchmark_csv(result: TFIMVQDBenchmarkResult, output_dir: str) ->
     print(f"VQD benchmark CSV saved to: {csv_path}")
 
 
+def _format_system_parameters(parameters: dict) -> str:
+    """Format system parameters for console summaries without assuming model keys."""
+
+    parts = []
+    for key, value in parameters.items():
+        if key == "num_qubits":
+            continue
+        parts.append(f"{key} = {value}")
+    return ", ".join(parts) if parts else "(none)"
+
+
+def _save_lattice_dashboard_snapshots(
+    series_list: list[SimBenchmarkResult],
+    output_dir: str,
+) -> None:
+    """Write lattice-dashboard PNG snapshots for series with site observables.
+
+    Purpose:
+        Persist a representative frame from the interactive dashboard without
+        requiring a GUI. Uses the last frame of each trajectory. Separate from
+        scalar sim plots; only runs when site arrays are present on results.
+    """
+
+    for series in series_list:
+        if not series.points:
+            continue
+        names = available_site_observables(series)
+        if not names:
+            continue
+        method = series.method_name or "sim"
+        for name in names:
+            for source in ("sim", "exact"):
+                try:
+                    trajectory = trajectory_from_sim_benchmark(
+                        series, site_observable=name, source=source
+                    )
+                except KeyError:
+                    continue
+                dashboard = LatticeDashboard(
+                    trajectory,
+                    show_slider=False,
+                    show_playback=False,
+                    initial_frame=len(trajectory.frames) - 1,
+                    window_title="Atlas — Spin Chain Visualization",
+                )
+                snap = os.path.join(
+                    output_dir, f"lattice_dashboard_{name}_{source}_{method}.png"
+                )
+                dashboard.save_snapshot(snap)
+                dashboard.close()
+                print(f"Lattice dashboard snapshot saved to: {snap}")
+
+
+def _save_sim_point_dashboard_snapshots(
+    point: SimPointResult,
+    output_dir: str,
+) -> None:
+    """Write single-frame lattice dashboard PNGs for a dynamics point."""
+
+    names = available_site_observables(point)
+    if not names:
+        return
+    method = point.method_name or "sim"
+    for name in names:
+        for source in ("sim", "exact"):
+            try:
+                trajectory = trajectory_from_sim_point(
+                    point, site_observable=name, source=source
+                )
+            except KeyError:
+                continue
+            dashboard = LatticeDashboard(
+                trajectory,
+                show_slider=False,
+                show_playback=False,
+                window_title="Atlas — Spin Chain Visualization",
+            )
+            snap = os.path.join(
+                output_dir, f"lattice_dashboard_{name}_{source}_{method}.png"
+            )
+            dashboard.save_snapshot(snap)
+            dashboard.close()
+            print(f"Lattice dashboard snapshot saved to: {snap}")
+
+
 def _save_sim_single_point(
     config: AtlasConfig, point: SimPointResult, output_dir: str
 ) -> None:
@@ -513,6 +608,7 @@ def _save_sim_single_point(
 
     if config.output.plots:
         plot_sim_single_point(point, output_dir)
+        _save_sim_point_dashboard_snapshots(point, output_dir)
         print(f"Plots saved to: {output_dir}")
 
 
@@ -549,10 +645,10 @@ def _save_sim_benchmark(
         print(f"Simulation benchmark CSV saved to: {csv_path}")
 
     if config.output.plots:
-        plot_all_sim(result, output_dir)
+        plot_all_sim_comparison([result], output_dir)
         if result.sweep_parameter == "num_trotter_steps":
-            # A lone step-sweep is still useful as a validation-style curve.
             plot_validation_comparison([result], output_dir)
+        _save_lattice_dashboard_snapshots([result], output_dir)
         print(f"Plots saved to: {output_dir}")
 
 
@@ -564,29 +660,22 @@ def _print_sim_single_point(point: SimPointResult, config: AtlasConfig) -> None:
 
     Inputs:
         point: Simulation point result.
-        config: System parameters for the header.
-
-    Process:
-        Print method/steps and per-observable sim/exact/abs_error lines.
-
-    Outputs:
-        None.
-
-    Side effects:
-        Writes to stdout.
+        config: Kept for API symmetry with other printers; parameter labels
+            come from ``point.system_parameters``.
     """
 
-    params = config.system.parameters
+    _ = config
     sim = point.sim_result
 
     print("=" * 50)
-    print(f" {point.num_qubits}-Qubit TFIM Hamiltonian Simulation (Single-Shot)")
-    print(f" Parameters: J = {params['J']}, h = {params['h']}")
+    print(f" {point.num_qubits}-Qubit Hamiltonian Simulation (Single-Shot)")
+    print(f" Parameters: {_format_system_parameters(point.system_parameters)}")
     print(f" Evolution time: {point.evolution_time}")
     print(f" Method: {sim.method_name}, steps: {sim.num_trotter_steps}")
     print("=" * 50)
     print("\n--- Final Results ---")
     print(f"State fidelity:          {point.fidelity:.6f}")
+    print(f"State infidelity:        {point.infidelity:.6e}")
     print(f"Circuit depth:           {sim.circuit_depth}")
     for name, value in point.observables.items():
         exact = point.exact_observables[name]
@@ -602,29 +691,13 @@ def _print_sim_benchmark(result: SimBenchmarkResult, config: AtlasConfig) -> Non
 
     Purpose:
         Quick overview of how fidelity and depth track the swept parameter.
-
-    Inputs:
-        result: Simulation benchmark collection.
-        config: System parameters for the header.
-
-    Process:
-        Print one row per point (sweep value, fidelity, depth, method), then
-        aggregate fidelity statistics.
-
-    Outputs:
-        None.
-
-    Side effects:
-        Writes to stdout.
     """
 
-    J = float(config.system.parameters["J"])
+    num_qubits = config.system.parameters.get("num_qubits", "?")
     print("=" * 50)
-    print(
-        f" {config.system.parameters['num_qubits']}-Qubit TFIM Simulation Benchmark"
-    )
+    print(f" {num_qubits}-Qubit Simulation Benchmark")
     print(f" Sweep parameter: {result.sweep_parameter}")
-    print(f" Parameters: J = {J}")
+    print(f" Parameters: {_format_system_parameters(dict(config.system.parameters))}")
     print("=" * 50)
 
     print(
@@ -633,9 +706,9 @@ def _print_sim_benchmark(result: SimBenchmarkResult, config: AtlasConfig) -> Non
     )
     print("-" * 50)
     for point in result.points:
-        sweep_value = getattr(point, result.sweep_parameter)
+        sweep_value = result.sweep_value(point)
         print(
-            f"{sweep_value:<16.4f} | {point.fidelity:<10.4f} | "
+            f"{float(sweep_value):<16.4f} | {point.fidelity:<10.4f} | "
             f"{point.sim_result.circuit_depth:<8} | {point.sim_result.method_name}"
         )
 
@@ -652,21 +725,6 @@ def _save_sim_validation(
 
     Purpose:
         Save multi-method step sweeps used to compare product formulas.
-
-    Inputs:
-        config: Output flags and qubit count for headers.
-        result: Validation result with one series per method.
-        output_dir: Destination directory.
-
-    Process:
-        Print validation tables; optionally write ``sim_validation.csv`` and
-        call ``plot_validation_result``.
-
-    Outputs:
-        None.
-
-    Side effects:
-        Stdout; optional CSV and plots.
     """
 
     _print_sim_validation(result, config)
@@ -677,46 +735,51 @@ def _save_sim_validation(
         print(f"Validation CSV saved to: {csv_path}")
 
     if config.output.plots:
-        plot_validation_result(result, output_dir)
+        plot_all_sim_comparison(result.series, output_dir)
+        if result.sweep_parameter == "num_trotter_steps":
+            plot_validation_comparison(result.series, output_dir)
+        _save_lattice_dashboard_snapshots(list(result.series), output_dir)
         print(f"Validation plots saved to: {output_dir}")
 
 
 def _print_sim_validation(result: SimValidationResult, config: AtlasConfig) -> None:
-    """Print per-method Trotter-step fidelity and max operator error tables.
+    """Print per-method tables for a multi-method dynamics comparison."""
 
-    Purpose:
-        Console view of how each evolution method converges with steps.
-
-    Inputs:
-        result: Validation result.
-        config: System parameters for the header (qubit count).
-
-    Process:
-        Print fixed ``J``, ``h``, time, and method list; then for each series
-        a table of steps / fidelity / max op error / depth.
-
-    Outputs:
-        None.
-
-    Side effects:
-        Writes to stdout.
-    """
-
-    print("=" * 50)
-    print(
-        f" {config.system.parameters['num_qubits']}-Qubit TFIM Trotter Validation"
+    num_qubits = result.system_parameters.get(
+        "num_qubits", config.system.parameters.get("num_qubits", "?")
     )
-    print(f" Parameters: J = {result.J}, h = {result.h}")
+    print("=" * 50)
+    print(f" {num_qubits}-Qubit Evolution Method Comparison")
+    print(f" Parameters: {_format_system_parameters(result.system_parameters)}")
+    if result.sweep_parameter != "single_point":
+        print(f" Sweep parameter: {result.sweep_parameter}")
     print(f" Evolution time: {result.evolution_time}")
-    print(f" Methods: {[series.method_name for series in result.series]}")
+    print(f" Methods: {result.method_names}")
     print("=" * 50)
 
     for series in result.series:
         print(f"\nMethod: {series.method_name}")
-        print(f"{'Steps':<8} | {'Fidelity':<10} | {'Max Op Err':<12} | {'Depth'}")
-        print("-" * 50)
+        if result.sweep_parameter == "single_point":
+            point = series.points[0]
+            print(f"State infidelity:        {point.infidelity:.6e}")
+            print(f"Circuit depth:           {point.circuit_depth}")
+            for name, value in point.observables.items():
+                exact = point.exact_observables[name]
+                error = point.observable_errors[name]
+                print(
+                    f"<{name}>: sim={value:.6f}, exact={exact:.6f}, "
+                    f"abs_error={error:.6e}"
+                )
+            continue
+
+        print(
+            f"{result.sweep_parameter:<16} | {'Infidelity':<12} | "
+            f"{'Max Op Err':<12} | {'Depth'}"
+        )
+        print("-" * 62)
         for point in series.points:
+            sweep_value = series.sweep_value(point)
             print(
-                f"{point.num_trotter_steps:<8} | {point.fidelity:<10.4f} | "
+                f"{float(sweep_value):<16.4f} | {point.infidelity:<12.2e} | "
                 f"{point.max_operator_error:<12.2e} | {point.circuit_depth}"
             )

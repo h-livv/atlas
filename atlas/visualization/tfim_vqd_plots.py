@@ -7,7 +7,7 @@ optimization, exact diagonalization, or hardware jobs.
 
 VQD recovers multiple low-lying eigenstates; these plots therefore loop over
 ``result.num_states`` (or the states on a single point) and use a shared color
-palette so each state index stays visually consistent across energy, fidelity,
+palette so each state index stays visually consistent across energy, infidelity,
 and error figures.
 
 ``matplotlib.use("Agg")`` is set before importing ``pyplot`` so these functions
@@ -30,16 +30,16 @@ from atlas.experiments.results import TFIMVQDBenchmarkResult, TFIMVQDPointResult
 
 # Tiny floor added before semilogy so exact-zero errors remain visible on a log axis.
 _EPS = 1e-12
-# Stable per-state colors so state k looks the same across energy/fidelity/error plots.
+# Stable per-state colors so state k looks the same across energy/infidelity/error plots.
 _STATE_COLORS = ["crimson", "darkorange", "forestgreen", "royalblue", "purple"]
 
 
 def plot_vqd_single_point(point: TFIMVQDPointResult, output_dir: str) -> None:
-    """Per-state energy, absolute error, and fidelity for a single VQD run.
+    """Per-state energy, absolute error, and infidelity for a single VQD run.
 
     Purpose:
         Summarize one ``(h, J)`` VQD optimization as a three-panel figure:
-        exact vs VQD energies, absolute energy errors, and fidelities — one bar
+        exact vs VQD energies, absolute energy errors, and infidelities — one bar
         group / bar per recovered state.
 
     Inputs:
@@ -51,7 +51,7 @@ def plot_vqd_single_point(point: TFIMVQDPointResult, output_dir: str) -> None:
 
     Process:
         1. Ensure ``output_dir`` exists.
-        2. Collect per-state exact/VQD energies, errors, and fidelities.
+        2. Collect per-state exact/VQD energies, errors, and infidelities.
         3. Draw three subplots side by side and save a single summary PNG.
 
     Outputs:
@@ -71,7 +71,7 @@ def plot_vqd_single_point(point: TFIMVQDPointResult, output_dir: str) -> None:
     exact = np.array(point.exact_energies)
     vqd = np.array([state.energy for state in point.vqd_result.states])
     errors = np.array(point.absolute_errors)
-    fidelities = np.array(point.fidelities)
+    infidelities = 1.0 - np.array(point.fidelities)
 
     fig, axes = plt.subplots(1, 3, figsize=(14, 4))
 
@@ -89,10 +89,10 @@ def plot_vqd_single_point(point: TFIMVQDPointResult, output_dir: str) -> None:
     axes[1].set_title("Per-State Absolute Error")
     axes[1].grid(True, axis="y", linestyle=":", alpha=0.6)
 
-    axes[2].bar(state_labels, fidelities, color="forestgreen", alpha=0.8)
-    axes[2].set_ylabel("Fidelity")
-    axes[2].set_ylim(0, 1.05)
-    axes[2].set_title("Per-State Fidelity")
+    axes[2].bar(state_labels, infidelities + _EPS, color="forestgreen", alpha=0.8)
+    axes[2].set_ylabel("Infidelity")
+    axes[2].set_yscale("log")
+    axes[2].set_title("Per-State Infidelity")
     axes[2].grid(True, axis="y", linestyle=":", alpha=0.6)
 
     fig.suptitle(f"VQD Results (h = {point.h}, J = {point.J})", fontsize=12)
@@ -166,26 +166,23 @@ def plot_vqd_energy(result: TFIMVQDBenchmarkResult, output_dir: str) -> None:
     plt.close()
 
 
-def plot_vqd_fidelity(result: TFIMVQDBenchmarkResult, output_dir: str) -> None:
-    """Plot per-state fidelity versus ``h/J``.
+def plot_vqd_infidelity(result: TFIMVQDBenchmarkResult, output_dir: str) -> None:
+    """Plot per-state infidelity versus ``h/J``.
 
     Purpose:
-        Show how faithfully each VQD state matches the corresponding exact
+        Show how far each VQD state is from the corresponding exact
         eigenstate across the transverse-field sweep.
 
     Inputs:
-        result: A ``TFIMVQDBenchmarkResult`` with ``state_fidelities`` and the
+        result: A ``TFIMVQDBenchmarkResult`` with ``state_infidelities`` and the
             same ``h``/``J`` layout as ``plot_vqd_energy``.
-        output_dir: Directory for ``vqd_fidelity_vs_hJ.png``.
+        output_dir: Directory for ``vqd_infidelity_vs_hJ.png``.
 
     Process:
-        Convert to ``h/J``, plot one fidelity curve per state, save, close.
+        Convert to ``h/J``, plot one infidelity curve per state, save, close.
 
     Outputs:
-        None. Writes ``vqd_fidelity_vs_hJ.png`` under ``output_dir``.
-
-    Side Effects:
-        Creates/overwrites the PNG; allocates and closes a matplotlib figure.
+        None. Writes ``vqd_infidelity_vs_hJ.png`` under ``output_dir``.
     """
 
     h_values = result.h_values
@@ -195,21 +192,20 @@ def plot_vqd_fidelity(result: TFIMVQDBenchmarkResult, output_dir: str) -> None:
     plt.figure(figsize=(8, 5))
     for state_index in range(result.num_states):
         color = _STATE_COLORS[state_index % len(_STATE_COLORS)]
-        plt.plot(
+        plt.semilogy(
             h_over_J,
-            result.state_fidelities(state_index),
+            result.state_infidelities(state_index) + _EPS,
             "-^",
             color=color,
             label=f"State {state_index}",
         )
-    plt.title("VQD State Fidelity vs Exact")
+    plt.title("VQD State Infidelity vs Exact")
     plt.xlabel("h/J Ratio (Transverse Field Strength)")
-    plt.ylabel("Fidelity (0 to 1)")
-    plt.ylim(0, 1.05)
+    plt.ylabel("Infidelity (1 − fidelity)")
     plt.legend()
     plt.grid(True, linestyle=":", alpha=0.6)
     plt.savefig(
-        os.path.join(output_dir, "vqd_fidelity_vs_hJ.png"), dpi=300, bbox_inches="tight"
+        os.path.join(output_dir, "vqd_infidelity_vs_hJ.png"), dpi=300, bbox_inches="tight"
     )
     plt.close()
 
@@ -267,7 +263,7 @@ def plot_all_tfim_vqd(result: TFIMVQDBenchmarkResult, output_dir: str) -> None:
 
     Purpose:
         Convenience entry point for experiment runners to dump energy,
-        fidelity, and absolute-error sweep plots after a VQD benchmark.
+        infidelity, and absolute-error sweep plots after a VQD benchmark.
 
     Inputs:
         result: A ``TFIMVQDBenchmarkResult`` covering the full ``h`` sweep.
@@ -275,7 +271,7 @@ def plot_all_tfim_vqd(result: TFIMVQDBenchmarkResult, output_dir: str) -> None:
 
     Process:
         1. Create ``output_dir`` if needed.
-        2. Call ``plot_vqd_energy``, ``plot_vqd_fidelity``, and
+        2. Call ``plot_vqd_energy``, ``plot_vqd_infidelity``, and
            ``plot_vqd_energy_errors`` in that order.
 
     Outputs:
@@ -288,5 +284,5 @@ def plot_all_tfim_vqd(result: TFIMVQDBenchmarkResult, output_dir: str) -> None:
 
     os.makedirs(output_dir, exist_ok=True)
     plot_vqd_energy(result, output_dir)
-    plot_vqd_fidelity(result, output_dir)
+    plot_vqd_infidelity(result, output_dir)
     plot_vqd_energy_errors(result, output_dir)

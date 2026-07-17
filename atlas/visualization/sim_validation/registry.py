@@ -67,7 +67,7 @@ def register_validation_plot(
 
 # Names used when plot_names is omitted; must match keys registered in plots.py.
 DEFAULT_VALIDATION_PLOTS: tuple[str, ...] = (
-    "fidelity_vs_trotter_steps",
+    "infidelity_vs_trotter_steps",
     "operator_error_vs_trotter_steps",
-    "circuit_depth_vs_accuracy",
+    "circuit_depth_vs_infidelity",
 )

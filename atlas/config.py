@@ -124,7 +124,8 @@ class OutputConfig:
     State:
         output_dir: Base directory; each run creates a timestamped subdirectory.
         csv: Whether to write benchmark CSV files.
-        plots: Whether to write PNG plots.
+        plots: Whether to write PNG plots (including lattice dashboard
+            snapshots when site observables are present).
 
     Usage:
         Shared by legacy and YAML configs. YAML key ``directory`` maps here
@@ -338,6 +339,8 @@ class AnalysisConfig:
 
     State:
         observables: Named observable set (currently ``tfim_default``).
+        site_observables: Optional per-site preset (``local_z``, ``local_x``,
+            ``local_y``) stored as arrays on dynamics results for lattice viz.
         fidelity: When ``True``, compare against exact reference states.
 
     Usage:
@@ -345,6 +348,7 @@ class AnalysisConfig:
     """
 
     observables: str = "tfim_default"
+    site_observables: Optional[str] = None
     fidelity: bool = True
 
 

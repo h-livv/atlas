@@ -6,9 +6,9 @@ plotters can draw. Metrics are addressed by string name via accessors so plot
 specs stay declarative and new metrics can be registered without changing the
 renderer.
 
-Built-in accessors cover fidelity, circuit depth, Trotter step count, and max
-observable error. Per-observable errors use the ``operator_error:<name>``
-prefix resolved at lookup time.
+Built-in accessors cover fidelity, infidelity, circuit depth, Trotter step
+count, and max observable error. Per-observable errors use the
+``operator_error:<name>`` prefix resolved at lookup time.
 """
 
 from __future__ import annotations
@@ -83,6 +83,7 @@ def _operator_error(name: str) -> PointAccessor:
 
 POINT_ACCESSORS: dict[str, PointAccessor] = {
     "fidelity": lambda point: float(point.fidelity),
+    "infidelity": lambda point: float(point.infidelity),
     "circuit_depth": lambda point: float(point.sim_result.circuit_depth),
     "num_trotter_steps": lambda point: float(point.sim_result.num_trotter_steps),
     "max_operator_error": _max_operator_error,
@@ -97,7 +98,7 @@ def resolve_point_accessor(name: str) -> PointAccessor:
         that extract floats from ``SimPointResult`` instances.
 
     Inputs:
-        name: Built-in names ``fidelity``, ``circuit_depth``,
+        name: Built-in names ``fidelity``, ``infidelity``, ``circuit_depth``,
             ``num_trotter_steps``, ``max_operator_error``, or a dynamic
             ``operator_error:<observable>`` key.
 

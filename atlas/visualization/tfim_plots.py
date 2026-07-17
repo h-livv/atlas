@@ -395,36 +395,31 @@ def plot_relative_error(result: TFIMBenchmarkResult, output_dir: str) -> None:
     plt.close()
 
 
-def plot_fidelity(result: TFIMBenchmarkResult, output_dir: str) -> None:
-    """Plot VQE state fidelity to the exact ground state versus ``h/J``.
+def plot_infidelity(result: TFIMBenchmarkResult, output_dir: str) -> None:
+    """Plot VQE state infidelity to the exact ground state versus ``h/J``.
 
     Purpose:
-        Show how close the VQE optimized state is to the exact ground state
-        across the transverse-field sweep (simulator-side fidelity only).
+        Show how far the VQE optimized state is from the exact ground state
+        across the transverse-field sweep (simulator-side infidelity only).
 
     Inputs:
-        result: A ``TFIMBenchmarkResult`` with ``h_values`` and ``fidelities``.
-        output_dir: Directory for ``fidelity_vs_hJ.png``.
+        result: A ``TFIMBenchmarkResult`` with ``h_values`` and ``infidelities``.
+        output_dir: Directory for ``infidelity_vs_hJ.png``.
 
     Process:
-        Plot fidelity vs ``h_values`` with a y-axis focused near 1, save, close.
+        Plot infidelity vs ``h_values`` on a log y-axis, save, close.
 
     Outputs:
-        None. Writes ``fidelity_vs_hJ.png`` under ``output_dir``.
-
-    Side Effects:
-        Creates/overwrites the PNG; allocates and closes a matplotlib figure.
+        None. Writes ``infidelity_vs_hJ.png`` under ``output_dir``.
     """
 
     plt.figure(figsize=(8, 5))
-    plt.plot(result.h_values, result.fidelities, "g-", marker="^")
-    plt.title("VQE State Fidelity vs Exact Ground State")
+    plt.semilogy(result.h_values, result.infidelities + 1e-16, "g-", marker="^")
+    plt.title("VQE State Infidelity vs Exact Ground State")
     plt.xlabel("h/J Ratio (Transverse Field Strength)")
-    plt.ylabel("Fidelity (0 to 1)")
-    # Legacy y-limits zoom on the high-fidelity regime typical for this benchmark.
-    plt.ylim([0.8, 1.05])
+    plt.ylabel("Infidelity (1 − fidelity)")
     plt.grid(True, linestyle=":", alpha=0.6)
-    plt.savefig(os.path.join(output_dir, "fidelity_vs_hJ.png"), dpi=300, bbox_inches="tight")
+    plt.savefig(os.path.join(output_dir, "infidelity_vs_hJ.png"), dpi=300, bbox_inches="tight")
     plt.close()
 
 
@@ -433,17 +428,17 @@ def plot_vqe_single_point(point, output_dir: str) -> None:
 
     Purpose:
         Summarize a single ``(h, J)`` VQE run: exact vs VQE energy bars, with
-        absolute error and fidelity annotated on the figure.
+        absolute error and infidelity annotated on the figure.
 
     Inputs:
         point: A TFIM point result with ``exact_energy``, ``vqe_result.energy``,
-            ``fidelity``, ``h``, and ``J`` (typically a ``TFIMPointResult``).
+            ``infidelity``, ``h``, and ``J`` (typically a ``TFIMPointResult``).
         output_dir: Directory for ``vqe_single_point_energy.png``. Created if
             missing.
 
     Process:
         1. Ensure ``output_dir`` exists.
-        2. Draw Exact/VQE energy bars and annotate absolute error + fidelity.
+        2. Draw Exact/VQE energy bars and annotate absolute error + infidelity.
         3. Label each bar with its numeric energy, save, and close.
 
     Outputs:
@@ -469,7 +464,7 @@ def plot_vqe_single_point(point, output_dir: str) -> None:
     ax.text(
         0.5,
         0.02,
-        f"Absolute error: {error:.3e}\nFidelity: {point.fidelity:.4f}",
+        f"Absolute error: {error:.3e}\nInfidelity: {point.infidelity:.3e}",
         transform=ax.transAxes,
         ha="center",
         va="bottom",
@@ -504,7 +499,7 @@ def plot_all_tfim(result: TFIMBenchmarkResult, output_dir: str) -> None:
     Process:
         1. Create ``output_dir`` if needed.
         2. Call energy, magnetization, energy-error, parity, relative-error,
-           and fidelity plotters in that order.
+           and infidelity plotters in that order.
         Hardware-only plots (``plot_parity``, ``plot_relative_error``) and
         hardware-only series within the other plots are skipped cleanly when the
         result has no hardware data, so this works end-to-end for an
@@ -525,4 +520,4 @@ def plot_all_tfim(result: TFIMBenchmarkResult, output_dir: str) -> None:
     plot_energy_errors(result, output_dir)
     plot_parity(result, output_dir)
     plot_relative_error(result, output_dir)
-    plot_fidelity(result, output_dir)
+    plot_infidelity(result, output_dir)

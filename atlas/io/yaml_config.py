@@ -53,10 +53,41 @@ _SUPPORTED = {
     "optimizer": {"scipy"},
     "backend": {"statevector", "statevector_evolver"},
     "observables": {"tfim_default"},
+    "site_observables": {"local_z", "local_x", "local_y"},
     "initial_state": {"computational"},
     "evolution_method": {"lie", "strang"},
+    # Dynamics may also sweep any key present in system.parameters (validated below).
     "sweep_parameter": {"h", "evolution_time", "num_trotter_steps"},
 }
+
+# Axes that are not necessarily stored under system.parameters.
+_DYNAMICS_SWEEP_AXES = frozenset({"evolution_time", "num_trotter_steps"})
+
+
+def _validate_sweep_parameter(
+    sweep_parameter: str,
+    system_params: dict[str, Any],
+    algorithm_name: str,
+) -> None:
+    """Validate a sweep axis against algorithm family and configured parameters."""
+
+    if is_variational_algorithm(algorithm_name):
+        if sweep_parameter != "h":
+            raise ValueError(
+                f"Sweep parameter '{sweep_parameter}' is not supported for "
+                f"variational experiments. Supported: h."
+            )
+        return
+
+    if sweep_parameter in _DYNAMICS_SWEEP_AXES:
+        return
+    if sweep_parameter in system_params:
+        return
+    raise ValueError(
+        f"Unknown sweep parameter '{sweep_parameter}'. "
+        f"Use evolution_time, num_trotter_steps, or a key from system.parameters "
+        f"({', '.join(sorted(system_params))})."
+    )
 
 
 def _section(raw: dict[str, Any], key: str) -> dict[str, Any]:
@@ -227,6 +258,25 @@ def _validate_dynamics_sections(raw: dict[str, Any]) -> InitialStateConfig:
     return InitialStateConfig(name=name, parameters=dict(parameters))
 
 
+def _validate_initial_state_bitstring(
+    initial_state: InitialStateConfig | None, num_qubits: int
+) -> None:
+    """Ensure a configured bitstring matches ``num_qubits`` when present."""
+
+    if initial_state is None:
+        return
+    bitstring = initial_state.parameters.get("bitstring")
+    if bitstring is None:
+        return
+    if not isinstance(bitstring, str):
+        raise ValueError("initial_state.parameters.bitstring must be a string.")
+    if len(bitstring) != num_qubits:
+        raise ValueError(
+            f"initial_state bitstring length {len(bitstring)} does not match "
+            f"num_qubits={num_qubits}."
+        )
+
+
 def load_config(path: str | Path) -> AtlasConfig:
     """Load and validate an ``AtlasConfig`` from a YAML file.
 
@@ -283,20 +333,29 @@ def load_config(path: str | Path) -> AtlasConfig:
     system_params = system_raw.get("parameters") or {}
     if not isinstance(system_params, dict):
         raise ValueError("system.parameters must be a mapping.")
+    if "num_qubits" not in system_params:
+        raise ValueError("system.parameters must include 'num_qubits'.")
+    try:
+        num_qubits = int(system_params["num_qubits"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("system.parameters.num_qubits must be an integer.") from exc
+    if num_qubits < 1:
+        raise ValueError("system.parameters.num_qubits must be at least 1.")
+
     sweep = system_raw.get("sweep")
     if sweep is not None:
         if not isinstance(sweep, dict):
             raise ValueError("system.sweep must be a mapping when present.")
+        if "values" not in sweep:
+            raise ValueError("system.sweep requires a 'values' list.")
         sweep_parameter = sweep.get("parameter", "h")
-        if sweep_parameter not in _SUPPORTED["sweep_parameter"]:
-            raise ValueError(
-                f"Unknown sweep parameter '{sweep_parameter}'. "
-                f"Supported: {', '.join(sorted(_SUPPORTED['sweep_parameter']))}."
-            )
 
     algorithm_name, algorithm_params = _named_section(
         raw, "algorithm", _SUPPORTED["algorithm"]
     )
+
+    if sweep is not None:
+        _validate_sweep_parameter(sweep_parameter, system_params, algorithm_name)
 
     # Variational paths need circuit + classical optimizer sections.
     if is_variational_algorithm(algorithm_name):
@@ -344,6 +403,7 @@ def load_config(path: str | Path) -> AtlasConfig:
                     "algorithm.parameters.num_trotter_steps as a non-empty list."
                 )
         initial_state_config = _validate_dynamics_sections(raw)
+        _validate_initial_state_bitstring(initial_state_config, num_qubits)
     else:
         initial_state_config = None
 
@@ -367,6 +427,13 @@ def load_config(path: str | Path) -> AtlasConfig:
         raise ValueError(
             f"Unknown observables '{observables}'. "
             f"Supported: {', '.join(sorted(_SUPPORTED['observables']))}."
+        )
+
+    site_observables = analysis_raw.get("site_observables")
+    if site_observables is not None and site_observables not in _SUPPORTED["site_observables"]:
+        raise ValueError(
+            f"Unknown site_observables '{site_observables}'. "
+            f"Supported: {', '.join(sorted(_SUPPORTED['site_observables']))}."
         )
 
     return AtlasConfig(
@@ -393,6 +460,7 @@ def load_config(path: str | Path) -> AtlasConfig:
         ),
         analysis=AnalysisConfig(
             observables=observables,
+            site_observables=site_observables,
             fidelity=bool(analysis_raw.get("fidelity", True)),
         ),
         output=OutputConfig(

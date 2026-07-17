@@ -163,6 +163,14 @@ class TFIMPointResult:
     observables: dict
     hardware_result: Optional[HardwareEvaluationResult] = None
 
+    @property
+    def infidelity(self) -> float:
+        """Return ``1 - fidelity``, or NaN when fidelity is undefined."""
+
+        if self.fidelity != self.fidelity:
+            return float("nan")
+        return float(1.0 - self.fidelity)
+
 
 @dataclass
 class TFIMVQDPointResult:
@@ -294,6 +302,11 @@ class TFIMVQDBenchmarkResult:
 
         return np.array([p.fidelities[state_index] for p in self.points])
 
+    def state_infidelities(self, state_index: int) -> np.ndarray:
+        """Return infidelities for one state index across the sweep."""
+
+        return 1.0 - self.state_fidelities(state_index)
+
     def state_absolute_errors(self, state_index: int) -> np.ndarray:
         """Return absolute energy errors for one state index across the sweep.
 
@@ -372,6 +385,12 @@ class TFIMBenchmarkResult:
         """Return state fidelities across the sweep."""
 
         return np.array([p.fidelity for p in self.points])
+
+    @property
+    def infidelities(self) -> np.ndarray:
+        """Return state infidelities (``1 - fidelity``) across the sweep."""
+
+        return np.array([p.infidelity for p in self.points])
 
     @property
     def iterations(self) -> np.ndarray:
@@ -457,23 +476,28 @@ class SimPointResult:
 
     Responsibility:
         Compare one Trotterized evolution against exact Schrödinger
-        evolution at fixed ``(J, h, t)``.
+        evolution at fixed system parameters and evolution time.
 
     State:
-        h, J, num_qubits, evolution_time: Labels.
+        system_parameters: Snapshot of configured system parameters used for
+            this point (physics-agnostic; e.g. ``num_qubits``, couplings).
+        num_qubits, evolution_time: Labels.
         exact_state: Exact evolved statevector.
         sim_result: Simulated ``SimulationResult``.
         fidelity: Overlap metric (or NaN if disabled).
-        observables / exact_observables: Named expectations.
+        observables / exact_observables: Named scalar expectations.
         observable_errors: Absolute errors per observable name.
+        site_observables / exact_site_observables: Optional named per-site
+            arrays (e.g. ``\"z\"`` → shape ``(n_sites,)``) for lattice viz.
+            Separate from scalar ``observables`` so CSV/bar plots stay clean.
 
     Usage:
         Produced by ``HamiltonianSimExperiment``; collected into
-        ``SimBenchmarkResult`` or validation series.
+        ``SimBenchmarkResult`` or validation series. Plotting/CSV layers
+        must not assume particular physics keys beyond what accessors expose.
     """
 
-    h: float
-    J: float
+    system_parameters: dict
     num_qubits: int
     evolution_time: float
     exact_state: np.ndarray
@@ -482,6 +506,8 @@ class SimPointResult:
     observables: dict
     exact_observables: dict
     observable_errors: dict
+    site_observables: dict = field(default_factory=dict)
+    exact_site_observables: dict = field(default_factory=dict)
 
     @property
     def num_trotter_steps(self) -> int:
@@ -502,6 +528,14 @@ class SimPointResult:
         return self.sim_result.method_name
 
     @property
+    def infidelity(self) -> float:
+        """Return ``1 - fidelity``, or NaN when fidelity is undefined."""
+
+        if self.fidelity != self.fidelity:  # NaN check
+            return float("nan")
+        return float(1.0 - self.fidelity)
+
+    @property
     def max_operator_error(self) -> float:
         """Return the largest absolute observable error at this point.
 
@@ -516,6 +550,11 @@ class SimPointResult:
             return float("nan")
         return float(max(self.observable_errors.values()))
 
+    def parameter(self, name: str, default=None):
+        """Return one system parameter by name from the stored snapshot."""
+
+        return self.system_parameters.get(name, default)
+
 
 @dataclass
 class SimBenchmarkResult:
@@ -526,8 +565,8 @@ class SimBenchmarkResult:
         for plotting and CSV export.
 
     State:
-        sweep_parameter: Name of the swept field (``evolution_time``, ``h``,
-            or ``num_trotter_steps``).
+        sweep_parameter: Name of the swept field (``evolution_time``,
+            ``num_trotter_steps``, or any key in ``system_parameters``).
         points: Ordered ``SimPointResult`` list.
 
     Usage:
@@ -553,17 +592,24 @@ class SimBenchmarkResult:
         """Return the swept coordinate for each point.
 
         Purpose:
-            Unify access whether the axis is a top-level field or nested
-            under ``num_trotter_steps``.
-
-        Process:
-            If sweeping steps, read ``p.num_trotter_steps``; otherwise
-            ``getattr(p, sweep_parameter)``.
+            Unify access whether the axis is evolution time, Trotter steps,
+            or an arbitrary system parameter stored on each point.
         """
 
         if self.sweep_parameter == "num_trotter_steps":
             return np.array([p.num_trotter_steps for p in self.points])
-        return np.array([getattr(p, self.sweep_parameter) for p in self.points])
+        if self.sweep_parameter == "evolution_time":
+            return np.array([p.evolution_time for p in self.points])
+        return np.array([p.system_parameters[self.sweep_parameter] for p in self.points])
+
+    def sweep_value(self, point: SimPointResult):
+        """Return the swept coordinate for a single point."""
+
+        if self.sweep_parameter == "num_trotter_steps":
+            return point.num_trotter_steps
+        if self.sweep_parameter == "evolution_time":
+            return point.evolution_time
+        return point.system_parameters[self.sweep_parameter]
 
     @property
     def method_name(self) -> str:
@@ -584,7 +630,7 @@ class SimBenchmarkResult:
             Single dispatcher for validation/comparison plot registries.
 
         Inputs:
-            metric: One of ``fidelity``, ``max_operator_error``,
+            metric: One of ``fidelity``, ``infidelity``, ``max_operator_error``,
                 ``circuit_depth``, ``num_trotter_steps``, or
                 ``operator_error:<name>``.
 
@@ -597,6 +643,8 @@ class SimBenchmarkResult:
 
         if metric == "fidelity":
             return self.fidelities
+        if metric == "infidelity":
+            return self.infidelities
         if metric == "max_operator_error":
             return np.array([p.max_operator_error for p in self.points])
         if metric == "circuit_depth":
@@ -613,6 +661,12 @@ class SimBenchmarkResult:
         """Return fidelities for each sweep point."""
 
         return np.array([p.fidelity for p in self.points])
+
+    @property
+    def infidelities(self) -> np.ndarray:
+        """Return infidelities (``1 - fidelity``) for each sweep point."""
+
+        return np.array([p.infidelity for p in self.points])
 
     def observable_values(self, name: str) -> np.ndarray:
         """Return simulated expectations for one observable across the sweep.
@@ -632,27 +686,52 @@ class SimBenchmarkResult:
 
         return np.array([p.exact_observables.get(name) for p in self.points])
 
+    def site_observable_series(
+        self, name: str, *, source: str = "sim"
+    ) -> np.ndarray:
+        """Return per-site values stacked as ``(n_points, n_sites)``.
+
+        Inputs:
+            name: Site-observable key (e.g. ``\"z\"``).
+            source: ``\"sim\"`` or ``\"exact\"``.
+        """
+
+        if not self.points:
+            return np.empty((0, 0))
+        key = "exact_site_observables" if source == "exact" else "site_observables"
+        rows = []
+        for point in self.points:
+            series = getattr(point, key)
+            if name not in series:
+                raise KeyError(
+                    f"Site observable '{name}' missing on a sweep point. "
+                    f"Available: {sorted(series)}"
+                )
+            rows.append(np.asarray(series[name], dtype=float))
+        return np.stack(rows, axis=0)
+
 
 @dataclass
 class SimValidationResult:
-    """Trotter-step validation across one or more evolution methods.
+    """Multi-method dynamics comparison across one or more benchmark series.
 
     Responsibility:
-        Group multiple ``SimBenchmarkResult`` series (one per method) at
-        fixed physics parameters for comparison plots and CSV export.
+        Group multiple ``SimBenchmarkResult`` series (one per evolution method)
+        for comparison plots and CSV export. Used for Trotter validation,
+        parameter sweeps, and single-point method comparisons.
 
     State:
-        h, J, evolution_time: Fixed physics/time labels.
-        series: List of ``SimBenchmarkResult``, each typically sweeping
-            ``num_trotter_steps`` for one method.
+        system_parameters: Snapshot of configured system parameters.
+        evolution_time: Companion or fixed evolution time when relevant.
+        series: List of ``SimBenchmarkResult``, each from one evolution method.
 
     Usage:
-        Produced by ``HamiltonianSimExperiment.run_trotter_validation``;
-        consumed by validation plotters and ``write_sim_validation``.
+        Produced by ``run_trotter_validation``, ``run_sweep_comparison``, and
+        ``run_single_point_comparison``; consumed by comparison plotters and
+        ``write_sim_validation``.
     """
 
-    h: float
-    J: float
+    system_parameters: dict
     evolution_time: float
     series: list = field(default_factory=list)
 
@@ -665,3 +744,17 @@ class SimValidationResult:
         """Iterate over per-method ``SimBenchmarkResult`` series."""
 
         return iter(self.series)
+
+    @property
+    def sweep_parameter(self) -> str:
+        """Return the swept axis shared by all method series."""
+
+        if not self.series:
+            return ""
+        return self.series[0].sweep_parameter
+
+    @property
+    def method_names(self) -> list[str]:
+        """Return evolution method names in series order."""
+
+        return [series.method_name for series in self.series if series.method_name]

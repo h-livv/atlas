@@ -5,7 +5,7 @@ experiment:
 system:
   name: tfim
   parameters:
-    num_qubits: 2
+    num_qubits: 4
     J: 1.0
     h: 0.5
   sweep:

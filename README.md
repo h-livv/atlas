@@ -27,7 +27,7 @@ This makes Atlas a **benchmarking and discovery environment** for NISQ-era metho
 * Transverse-field Ising model (TFIM)
 * Exact diagonalization (small systems)
 * Exact time evolution
-* Observable evaluation
+* Observable evaluation (global scalars and optional per-site arrays)
 
 ### Quantum Algorithms
 
@@ -38,18 +38,41 @@ This makes Atlas a **benchmarking and discovery environment** for NISQ-era metho
 ### Validation & Analysis
 
 * Exact reference benchmarking
-* State fidelity
+* State fidelity / infidelity
 * Energy and observable errors
 * Operator error
-* Circuit depth and gate counts
-* Publication-quality plots
+* Circuit depth
+* Publication-quality static plots
+* Interactive lattice dashboard (Matplotlib time slider + play/pause)
 
 ### Experiment Pipeline
 
 * YAML-based experiment configuration
-* Experiment orchestration
-* Simulator and IBM Quantum execution
-* Timestamped output directories
+* Experiment orchestration (`single_point`, `sweep`, `trotter_validation`)
+* Simulator and IBM Quantum execution (variational path)
+* Timestamped output directories (CSV + PNG artifacts)
+
+---
+
+## Quick start
+
+From the repository root (with dependencies from `requirements.txt` installed):
+
+```bash
+# Batch experiment (CSV / static plots)
+python -m atlas.main --config configs/tfim_vqe_single.yaml
+python -m atlas.main --config configs/tfim_hamiltonian_sim_time_sweep.yaml
+
+# Interactive lattice dashboard (dynamics + per-site observables)
+python scripts/run_lattice_dashboard.py
+python scripts/run_lattice_dashboard.py --config configs/tfim_hamiltonian_sim_time_sweep.yaml --method strang
+```
+
+Each `atlas.main` run writes under `atlas/data/<experiment_name>_<timestamp>/`.
+
+The lattice dashboard consumes precomputed site series (for example `analysis.site_observables: local_z`). It does not recompute physics. See `docs/data/data_generation_guide.md`.
+
+---
 
 ## Architecture
 
@@ -60,8 +83,23 @@ Atlas is built from modular components that can be extended independently:
 * **Circuits** — Ansatzes and evolution circuits
 * **Execution** — Simulator and hardware backends
 * **Analysis** — Validation metrics
-* **Visualization** — Plotting utilities
+* **Visualization** — Static plots and a physics-agnostic lattice dashboard
 * **Experiments** — Workflow orchestration
+
+Dynamics visualization under `atlas/visualization/hamiltonian_sim/` is a **renderer only**: it draws supplied geometry and site values (1D chains today; graphs/2D layouts via the same renderer). It never inspects Hamiltonians or evolution methods.
+
+---
+
+## Documentation
+
+| Document | Contents |
+|----------|----------|
+| [`docs/data/data_generation_guide.md`](docs/data/data_generation_guide.md) | How to run configs; plot/CSV catalog; lattice dashboard |
+| [`docs/architecture/atlas_component_extension_guide.md`](docs/architecture/atlas_component_extension_guide.md) | How to extend systems, algorithms, observables, plots |
+| [`docs/architecture/architecture_analysis.md`](docs/architecture/architecture_analysis.md) | Current codebase architecture |
+| [`docs/architecture/hamiltonian_sim_performance_optimization_analysis.md`](docs/architecture/hamiltonian_sim_performance_optimization_analysis.md) | Dynamics performance bottleneck & optimization design (no impl yet) |
+| [`docs/validation/vqe_tfim.md`](docs/validation/vqe_tfim.md) | VQE / TFIM physics and validation notes |
+| [`docs/architecture/architecture_review_for_ham_sim.md`](docs/architecture/architecture_review_for_ham_sim.md) | Historical ham-sim design review (superseded) |
 
 ---
 
@@ -84,7 +122,9 @@ Future development focuses on expanding both supported physical systems and quan
 - Phase Estimation
 - Time-dependent Hamiltonian simulation
 
+**Visualization**
 
-For implementation details and extension guidelines, see the documentation in `docs/`.
+- Edge / bond observable overlays on the lattice dashboard
+- Additional lattice views (2D grids, arbitrary graphs) using the existing graph renderer
 
 ---
