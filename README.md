@@ -1,8 +1,8 @@
 # Atlas
 
-**Atlas is a physics-first quantum simulation framework for studying quantum systems.**
+**Atlas is a physics-first framework for studying quantum systems through simulation and quantum algorithms.**
 
-The framework combines modular Hamiltonian definitions, quantum algorithms, exact reference solvers, and benchmarking tools into a unified workflow for studying equilibrium properties and real-time dynamics.
+Atlas is designed to serve as an experimental environment for implementing quantum algorithms from first principles, reproducing results from literature, validating them against exact solutions, and investigating their behavior on both simulators and quantum hardware.
 
 ---
 
@@ -29,8 +29,7 @@ This makes Atlas a **benchmarking and discovery environment** for NISQ-era metho
 * Exact time evolution
 * Observable evaluation (global scalars and optional per-site arrays)
 
-### Quantum Algorithms
-
+### Implemented Quantum Methods
 * **VQE** — Ground-state search
 * **VQD** — Excited-state computation
 * **Hamiltonian Simulation** — Lie-Trotter and Strang product formulas
@@ -103,28 +102,29 @@ Dynamics visualization under `atlas/visualization/hamiltonian_sim/` is a **rende
 
 ---
 
-## Roadmap
+## Research Directions
 
-Future development focuses on expanding both supported physical systems and quantum methods.
+### Quantum Algorithms
 
-**Physical systems**
-
-- Heisenberg model
-- Hubbard model
-- Molecular Hamiltonians
-
-**Quantum methods**
-
-- Higher-order Suzuki formulas
-- QDrift and randomized product formulas
-- Quantum Signal Processing (QSP)
+- Variational algorithms
+- Hamiltonian simulation
+- Fault-tolerant simulation algorithms
+- Quantum Phase Estimation
+- Quantum Signal Processing
 - Qubitization
-- Phase Estimation
-- Time-dependent Hamiltonian simulation
 
-**Visualization**
+### Physical Systems
 
-- Edge / bond observable overlays on the lattice dashboard
-- Additional lattice views (2D grids, arbitrary graphs) using the existing graph renderer
+- Strongly correlated spin systems
+- Lattice fermion models
+- Quantum chemistry
+- Open quantum systems
+
+### Validation Studies
+
+- Product formula error analysis
+- Noise characterization
+- Hardware benchmarking
+- Resource estimation
 
 ---
