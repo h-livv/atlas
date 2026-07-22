@@ -1,6 +1,6 @@
 # Atlas
 
-**Atlas is a physics-first framework for studying quantum systems through simulation and quantum algorithms.**
+**A physics-first framework for studying quantum systems through simulation and quantum algorithms.**
 
 Atlas is designed to serve as an experimental environment for implementing quantum algorithms from first principles, reproducing results from literature, validating them against exact solutions, and investigating their behavior on both simulators and quantum hardware.
 
@@ -34,15 +34,12 @@ This makes Atlas a **benchmarking and discovery environment** for NISQ-era metho
 * **VQD** — Excited-state computation
 * **Hamiltonian Simulation** — Lie-Trotter and Strang product formulas
 
-### Validation & Analysis
+### Validation
 
-* Exact reference benchmarking
-* State fidelity / infidelity
-* Energy and observable errors
-* Operator error
-* Circuit depth
-* Publication-quality static plots
-* Interactive lattice dashboard (Matplotlib time slider + play/pause)
+- Exact reference solutions
+- Fidelity and observable errors
+- Circuit resource analysis
+- Static and interactive visualization
 
 ### Experiment Pipeline
 
@@ -85,20 +82,15 @@ Atlas is built from modular components that can be extended independently:
 * **Visualization** — Static plots and a physics-agnostic lattice dashboard
 * **Experiments** — Workflow orchestration
 
-Dynamics visualization under `atlas/visualization/hamiltonian_sim/` is a **renderer only**: it draws supplied geometry and site values (1D chains today; graphs/2D layouts via the same renderer). It never inspects Hamiltonians or evolution methods.
-
 ---
 
 ## Documentation
 
-| Document | Contents |
-|----------|----------|
-| [`docs/data/data_generation_guide.md`](docs/data/data_generation_guide.md) | How to run configs; plot/CSV catalog; lattice dashboard |
-| [`docs/architecture/atlas_component_extension_guide.md`](docs/architecture/atlas_component_extension_guide.md) | How to extend systems, algorithms, observables, plots |
-| [`docs/architecture/architecture_analysis.md`](docs/architecture/architecture_analysis.md) | Current codebase architecture |
-| [`docs/architecture/hamiltonian_sim_performance_optimization_analysis.md`](docs/architecture/hamiltonian_sim_performance_optimization_analysis.md) | Dynamics performance bottleneck & optimization design (no impl yet) |
-| [`docs/validation/vqe_tfim.md`](docs/validation/vqe_tfim.md) | VQE / TFIM physics and validation notes |
-| [`docs/architecture/architecture_review_for_ham_sim.md`](docs/architecture/architecture_review_for_ham_sim.md) | Historical ham-sim design review (superseded) |
+- [`Usage Guide`](docs/data/data_generation_guide.md)
+- [`Extension Guide`](docs/architecture/atlas_component_extension_guide.md)
+- [`Architecture`](docs/architecture/architecture_analysis.md)
+- [`Simulation Performace Analysis`](docs/architecture/hamiltonian_sim_performance_optimization_analysis.md)
+- [`VQE Notes`](docs/validation/vqe_tfim.md)
 
 ---
 
@@ -126,5 +118,9 @@ Dynamics visualization under `atlas/visualization/hamiltonian_sim/` is a **rende
 - Noise characterization
 - Hardware benchmarking
 - Resource estimation
+
+---
+
+Atlas is an evolving laboratory for computational quantum physics. Its goal is to understand quantum algorithms by implementing them from first principles, validating them against known physics, and exploring where they succeed, fail, and scale.
 
 ---
