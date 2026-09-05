@@ -55,7 +55,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     physics.add_argument(
         "--times",
         type=_parse_times,
-        default=_parse_times("0,0.25,0.5,1.0"),
+        default=_parse_times("0,0.25,0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,5.0,5.5,6.0,7.0,8.0,9.0,1.0"),
         help="Comma-separated evolution times",
     )
     physics.add_argument("--steps", type=int, default=20, help="Trotter steps")

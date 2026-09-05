@@ -124,3 +124,6 @@ Atlas is built from modular components that can be extended independently:
 Atlas is an evolving laboratory for computational quantum physics. Its goal is to understand quantum algorithms by implementing them from first principles, validating them against known physics, and exploring where they succeed, fail, and scale.
 
 ---
+
+## Status (as of 2026-09-06)
+Archived.
