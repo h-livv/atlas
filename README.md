@@ -1,8 +1,15 @@
 # Atlas
 
-**A physics-first framework for studying quantum systems through simulation and quantum algorithms.**
+### A physics-first framework for studying quantum systems through simulation and quantum algorithms.
 
-Atlas is designed to serve as an experimental environment for implementing quantum algorithms from first principles, reproducing results from literature, validating them against exact solutions, and investigating their behavior on both simulators and quantum hardware.
+> **Status: Archived (September 2026).**
+> <br>
+> Atlas is no longer under active development.
+> <br>
+> It was developed as an experimental
+> environment for implementing quantum algorithms from first principles,
+> reproducing results from the literature, validating them against exact
+> solutions, and comparing simulation with quantum hardware.
 
 ---
 
@@ -20,7 +27,7 @@ This makes Atlas a **benchmarking and discovery environment** for NISQ-era metho
 
 ---
 
-## Current Capabilities
+## Implemented
 
 ### Physical Models
 
@@ -89,41 +96,11 @@ Atlas is built from modular components that can be extended independently:
 - [`Usage Guide`](docs/data/data_generation_guide.md)
 - [`Extension Guide`](docs/architecture/atlas_component_extension_guide.md)
 - [`Architecture`](docs/architecture/architecture_analysis.md)
-- [`Simulation Performace Analysis`](docs/architecture/hamiltonian_sim_performance_optimization_analysis.md)
+- [`Simulation Performance Analysis`](docs/architecture/hamiltonian_sim_performance_optimization_analysis.md)
 - [`VQE Notes`](docs/validation/vqe_tfim.md)
 
 ---
 
-## Research Directions
-
-### Quantum Algorithms
-
-- Variational algorithms
-- Hamiltonian simulation
-- Fault-tolerant simulation algorithms
-- Quantum Phase Estimation
-- Quantum Signal Processing
-- Qubitization
-
-### Physical Systems
-
-- Strongly correlated spin systems
-- Lattice fermion models
-- Quantum chemistry
-- Open quantum systems
-
-### Validation Studies
-
-- Product formula error analysis
-- Noise characterization
-- Hardware benchmarking
-- Resource estimation
+Atlas was designed as a laboratory for computational quantum physics. Its goal was to understand quantum algorithms by implementing them from first principles, validating them against known physics, and exploring where they succeed, fail, and scale.
 
 ---
-
-Atlas is an evolving laboratory for computational quantum physics. Its goal is to understand quantum algorithms by implementing them from first principles, validating them against known physics, and exploring where they succeed, fail, and scale.
-
----
-
-## Status (as of 2026-09-06)
-Archived.
