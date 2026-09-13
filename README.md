@@ -1,118 +1,233 @@
 # Atlas
 
-### A physics-first framework for studying quantum systems through simulation and quantum algorithms.
+### A physics-first computational environment for studying quantum algorithms.
 
-> **Status: Archived (September 2026).**
-> <br>
+Atlas is an experimental environment for studying quantum algorithms by applying
+them to explicit physical models and comparing their results against known
+quantum-mechanical solutions.
+
+> **Status:** Archived
 > Atlas is no longer under active development.
 > <br>
-> It was developed as an experimental
-> environment for implementing quantum algorithms from first principles,
-> reproducing results from the literature, validating them against exact
-> solutions, and comparing simulation with quantum hardware.
+> It was developed as an experimental environment for implementing quantum algorithms
+> from first principles, reproducing results from the literature, and systematically
+> comparing approximate, exact, simulated, and hardware results.
 
 ---
 
-## Philosophy
+## Experimental Method
 
-Most quantum software organizes around algorithms or hardware backends. Atlas organizes around **physical models**.
+Rather than treating an algorithm as an isolated circuit, Atlas asks how well a
+computational method reproduces the behavior of a physical system, and how its
+accuracy changes with parameters, approximation choices, circuit resources, and
+hardware noise.
 
-1. **Define the system** — Hamiltonian $H$, parameters, and physically meaningful observables.
-2. **Choose a quantum method** — variational ground-state search, excited-state deflation, or Hamiltonian simulation.
-3. **Compare against physics** — on small systems, Atlas computes exact reference solutions (diagonalization, exact time evolution) so algorithm output is judged against the true quantum-mechanical answer, not just internal consistency.
-4. **Run on hardware** — run algorithms on IBM Quantum devices and compare with simulation results to analyze effects of noise.
-5. **Explore parameter space** — sweep coupling ratios, evolution times, or discretization steps and record how physical quantities and errors respond.
+It organizes experiments around physical systems rather than quantum
+software backends.
 
-This makes Atlas a **benchmarking and discovery environment** for NISQ-era methods applied to condensed-matter-style problems.
+### 1. Define the system
 
----
+Specify a Hamiltonian, its parameters, and the physical observables of interest.
 
-## Implemented
+### 2. Apply a quantum method
 
-### Physical Models
+Run a computational method such as:
 
-* Transverse-field Ising model (TFIM)
-* Exact diagonalization (small systems)
-* Exact time evolution
-* Observable evaluation (global scalars and optional per-site arrays)
+* variational ground-state search
+* excited-state computation
+* Hamiltonian time evolution
 
-### Implemented Quantum Methods
-* **VQE** — Ground-state search
-* **VQD** — Excited-state computation
-* **Hamiltonian Simulation** — Lie-Trotter and Strang product formulas
+### 3. Compute an exact reference
 
-### Validation
+For sufficiently small systems, Atlas independently computes the expected
+quantum-mechanical result using exact diagonalization or exact time evolution.
 
-- Exact reference solutions
-- Fidelity and observable errors
-- Circuit resource analysis
-- Static and interactive visualization
+This provides a reference against which approximate algorithms can be evaluated.
 
-### Experiment Pipeline
+### 4. Measure error
 
-* YAML-based experiment configuration
-* Experiment orchestration (`single_point`, `sweep`, `trotter_validation`)
-* Simulator and IBM Quantum execution (variational path)
-* Timestamped output directories (CSV + PNG artifacts)
+Compare algorithmic results with the exact solution using quantities such as
+fidelity, observable errors, and circuit-resource requirements.
 
----
+### 5. Run on hardware
 
-### Experimental Dashboard
+Variational experiments can be executed on IBM Quantum devices to compare
+ideal simulation with hardware results and study the effects of noise.
 
-An experimental interactive visualization for inspecting simulated spin-chain
-dynamics and site-resolved observables.
+### 6. Explore parameter space
 
-<img src="assets/dashboard.png" alt="Description of the animation" width="500">
-
-<br>
-
-> **Experimental:** The dashboard was implemented as a visualization layer but
-> was not independently validated against analytical or numerical reference
-> results. It should not be interpreted as evidence of physical correctness.
-
+Experiments can sweep quantities such as coupling strengths, evolution times,
+and Trotter step sizes to investigate how physical observables and numerical
+errors change.
 
 ---
 
-## Quick start
+## Physical Models
 
-From the repository root (with dependencies from `requirements.txt` installed):
+### Transverse-Field Ising Model
 
-```bash
-# Batch experiment (CSV / static plots)
-python -m atlas.main --config configs/tfim_vqe_single.yaml
-python -m atlas.main --config configs/tfim_hamiltonian_sim_time_sweep.yaml
+Atlas currently uses the **transverse-field Ising model (TFIM)** as its primary
+test system.
 
-# Interactive lattice dashboard (dynamics + per-site observables)
-python scripts/run_lattice_dashboard.py
-python scripts/run_lattice_dashboard.py --config configs/tfim_hamiltonian_sim_time_sweep.yaml --method strang
+The implementation includes:
+
+* Hamiltonian construction
+* exact diagonalization
+* exact time evolution
+* global observables
+* optional site-resolved observables
+
+---
+
+## Quantum Methods
+
+### VQE
+
+Variational Quantum Eigensolver for estimating ground-state energies and
+states.
+
+### VQD
+
+Variational Quantum Deflation for estimating excited states.
+
+### Hamiltonian Simulation
+
+Real-time evolution using:
+
+* Lie-Trotter product formulas
+* Strang splitting
+
+---
+
+## Validation
+
+Atlas is designed so that approximate methods can be evaluated against
+independently computed reference solutions.
+
+Validation includes:
+
+* energy and observable errors
+* state fidelity
+* Trotterization error
+* circuit-resource analysis
+* comparison between simulation and hardware results
+
+This makes the output of an experiment a quantitative object to analyze rather
+than simply a successful circuit execution.
+
+---
+
+## Experiment Workflow
+
+Experiments are specified through YAML configurations and can be run as:
+
+* single-point experiments
+* parameter sweeps
+* Trotter validation experiments
+
+Each run produces timestamped outputs containing numerical results and
+visualizations.
+
+```text
+configs/
+    │
+    ▼
+Atlas experiment runner
+    │
+    ├── Simulator
+    └── IBM Quantum
+    │
+    ▼
+CSV + plots + experiment metadata
 ```
-
-Each `atlas.main` run writes under `atlas/data/<experiment_name>_<timestamp>/`.
-
-The lattice dashboard consumes precomputed site series (for example `analysis.site_observables: local_z`). It does not recompute physics. See `docs/data/data_generation_guide.md`.
 
 ---
 
 ## Architecture
 
-Atlas is built from modular components that can be extended independently:
+The implementation is divided into components corresponding to different parts
+of the experimental workflow:
 
-* **Physics** — Hamiltonians, observables, exact solvers
-* **Algorithms** — VQE, VQD, Hamiltonian simulation
-* **Circuits** — Ansatzes and evolution circuits
-* **Execution** — Simulator and hardware backends
-* **Analysis** — Validation metrics
-* **Visualization** — Static plots and a physics-agnostic lattice dashboard
-* **Experiments** — Workflow orchestration
+```text
+Physics
+├── Hamiltonians
+├── Observables
+└── Exact Solvers
+
+Algorithms
+├── VQE
+├── VQD
+└── Hamiltonian Simulation
+
+Circuits
+└── Ansatz / Evolution Circuits
+
+Execution
+├── Simulators
+└── Hardware Backends
+
+Analysis
+└── Validation Metrics
+
+Experiments
+└── Configuration and Orchestration
+
+Visualization
+└── Static and Interactive Analysis
+```
+
+---
+
+## Experimental Dashboard
+
+Atlas also contains an experimental visualization layer for inspecting simulated
+spin-chain dynamics and site-resolved observables.
+
+<img src="assets/dashboard.png" alt="Spin-chain dynamics dashboard" width="500">
+
+> **Experimental:** The dashboard was implemented as a visualization layer and
+> was not independently validated against analytical or numerical reference
+> results. It should not be interpreted as evidence of physical correctness.
+
+The dashboard consumes precomputed site-resolved observables rather than
+recomputing the underlying physics.
+
+---
+
+## Quick Start
+
+With dependencies from `requirements.txt` installed:
+
+```bash
+python -m atlas.main --config configs/tfim_vqe_single.yaml
+python -m atlas.main --config configs/tfim_hamiltonian_sim_time_sweep.yaml
+```
+
+For the interactive lattice dashboard:
+
+```bash
+python scripts/run_lattice_dashboard.py
+python scripts/run_lattice_dashboard.py \
+    --config configs/tfim_hamiltonian_sim_time_sweep.yaml \
+    --method strang
+```
+
+Experiment outputs are written under:
+
+```text
+atlas/data/<experiment_name>_<timestamp>/
+```
+
+See the documentation for the experiment and data-generation workflow.
 
 ---
 
 ## Documentation
 
-- [`Usage Guide`](docs/data/data_generation_guide.md)
-- [`Extension Guide`](docs/architecture/atlas_component_extension_guide.md)
-- [`Architecture`](docs/architecture/architecture_analysis.md)
-- [`Simulation Performance Analysis`](docs/architecture/hamiltonian_sim_performance_optimization_analysis.md)
-- [`VQE Notes`](docs/validation/vqe_tfim.md)
+* [`Usage Guide`](docs/data/data_generation_guide.md)
+* [`Extension Guide`](docs/architecture/atlas_component_extension_guide.md)
+* [`Architecture`](docs/architecture/architecture_analysis.md)
+* [`Simulation Performance Analysis`](docs/architecture/hamiltonian_sim_performance_optimization_analysis.md)
+* [`VQE Notes`](docs/validation/vqe_tfim.md)
 
 ---
