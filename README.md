@@ -57,6 +57,22 @@ This makes Atlas a **benchmarking and discovery environment** for NISQ-era metho
 
 ---
 
+### Experimental Dashboard
+
+An experimental interactive visualization for inspecting simulated spin-chain
+dynamics and site-resolved observables.
+
+<img src="assets/dashboard.png" alt="Description of the animation" width="500">
+
+<br>
+
+> **Experimental:** The dashboard was implemented as a visualization layer but
+> was not independently validated against analytical or numerical reference
+> results. It should not be interpreted as evidence of physical correctness.
+
+
+---
+
 ## Quick start
 
 From the repository root (with dependencies from `requirements.txt` installed):
@@ -98,9 +114,5 @@ Atlas is built from modular components that can be extended independently:
 - [`Architecture`](docs/architecture/architecture_analysis.md)
 - [`Simulation Performance Analysis`](docs/architecture/hamiltonian_sim_performance_optimization_analysis.md)
 - [`VQE Notes`](docs/validation/vqe_tfim.md)
-
----
-
-Atlas was designed as a laboratory for computational quantum physics. Its goal was to understand quantum algorithms by implementing them from first principles, validating them against known physics, and exploring where they succeed, fail, and scale.
 
 ---
